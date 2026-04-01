@@ -18,6 +18,9 @@ iOS application to track screen time and stop you being on your phone
  - Places where you can not adjust settings
  - Can only adjust settings at home?
  - Friends can send encouraging message back
+ - Goals in the app. Set why you want to stop using screens. That can come as reminder
+ - We want notifications to overlay if possible - this will be the hard part
+ - 
 
 
 
