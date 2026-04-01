@@ -17,6 +17,7 @@ iOS application to track screen time and stop you being on your phone
  - Location blocking
  - Places where you can not adjust settings
  - Can only adjust settings at home?
+ - Friends can send encouraging message back
 
 
 
