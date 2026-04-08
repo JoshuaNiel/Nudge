@@ -122,14 +122,14 @@ Time limit goals per app or category.
 | categoryId | bigint | Nullable FK → app_category(id) |
 | targetType | enum | `app`, `category`, `total` |
 | temporary | boolean | Whether this is a time-bounded goal |
-| startTime | timestamptz | Only used when temporary = true |
-| endTime | timestamptz | Only used when temporary = true |
+| startDate | date | Only used when temporary = true |
+| endDate | date | Only used when temporary = true |
 
 **On `bundleId` vs `categoryId`:** Both are nullable. Exactly one should be set depending on `targetType` (enforced via check constraint). This gives real referential integrity vs. a single polymorphic `targetId` integer column which cannot have a FK constraint.
 
 **On `frequency`:** The `limitSeconds` applies to the window defined by `frequency`. Evaluation queries `usage` summed over the appropriate window — today for `daily`, the current week (respecting `weekStart` from profiles) for `weekly`, the current calendar month for `monthly`.
 
-**On `temporary`:** When `true`, `frequency` is ignored and the goal applies only between `startTime` and `endTime`.
+**On `temporary`:** When `true`, `frequency` is ignored and the goal applies only between `startDate` and `endDate`.
 
 ### `why_reminder`
 Motivational reminders sent as notifications to help users stay intentional. Not tied to specific goals — a random or round-robin active reminder is selected when sending a notification.
@@ -150,9 +150,9 @@ Stores the app user's contacts. Friends do not need a Supabase account or the ap
 | friendName | varchar | Display name |
 | friendPhoneNumber | varchar | E.164 format (`+18015551234`) |
 | status | enum | `pending`, `accepted`, `blocked` |
-| timestamp | timestamptz | UTC — when the consent SMS was sent |
+| invitationTimestamp | timestamptz | UTC — when the consent SMS was sent |
 
-**On `status`:** `pending` while awaiting consent reply; `accepted` once friend confirms; `blocked` for Twilio STOP opt-outs. Friends who reply no are deleted outright — no row retained.
+**On `status`:** `pending` while awaiting consent reply; `accepted` once friend confirms; `blocked` for Twilio STOP opt-outs only. Friends who reply no are deleted outright — no row retained.
 
 ### `nudge`
 Tracks each SMS nudge sent to a friend and the friend's reply.
@@ -163,9 +163,9 @@ Tracks each SMS nudge sent to a friend and the friend's reply.
 | friendId | bigint | FK → friend(id) |
 | prompt | varchar | The message options sent to the friend via SMS |
 | friendReply | varchar | The friend's reply text (populated by Twilio webhook) |
-| type | enum | `shame`, `encouragement` |
-| status | enum | `sent_to_friend`, `replied`, `delivered_to_user`, `failed` |
-| timestamp | timestamptz | UTC — when the nudge was sent |
+| type | enum | `shame`, `encouragement`, `custom` |
+| status | enum | `sent_to_friend`, `replied`, `reply_delivered`, `failed` |
+| sentTimestamp | timestamptz | UTC — when the nudge was sent |
 
 **Note:** The app user is derivable via `friend.userId` — no separate receiver column is needed on `nudge`.
 
@@ -176,7 +176,7 @@ Tracks each SMS nudge sent to a friend and the friend's reply.
 **Rule: store everything in UTC, convert at display time.**
 
 ### Timestamp columns (`timestamptz`)
-Use `timestamptz` for all moment-in-time values (`nudges.timestamp`, `goal.startTime`, `goal.endTime`). Postgres stores these as UTC internally and handles conversion correctly.
+Use `timestamptz` for all moment-in-time values (e.g. `nudge.sentTimestamp`, `friend.invitationTimestamp`). Postgres stores these as UTC internally and handles conversion correctly.
 
 ### Usage dates (`date`)
 `usage.date` uses Postgres `date` type (no timezone). This is intentional — it represents the **local calendar date the user experienced**, not a UTC date.
