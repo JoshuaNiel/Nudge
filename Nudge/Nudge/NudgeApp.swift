@@ -1,10 +1,3 @@
-//
-//  NudgeApp.swift
-//  Nudge
-//
-//  Created by Joshua Nielsen on 4/6/26.
-//
-
 import SwiftUI
 
 @main
@@ -13,7 +6,7 @@ struct NudgeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
                 .environmentObject(appState)
         }
     }
