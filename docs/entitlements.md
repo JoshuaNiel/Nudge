@@ -13,7 +13,7 @@ These are provisioning-level entitlements configured in the Apple Developer port
 | Family Controls | DeviceActivity, ManagedSettings, app blocking | TODO | Requires explicit approval from Apple — apply early |
 | App Groups | Sharing data between app and extensions | TODO | Define group ID: `group.com.yourname.nudge` |
 | Push Notifications | APNs social nudges | TODO | Standard capability, no special approval needed |
-| Sign in with Apple | Auth (if offered) | TODO | Required if any other third-party auth is used |
+| Sign in with Apple | Auth | Done | Added to Nudge target in Xcode |
 | HealthKit | Not planned | N/A | |
 
 > TODO: Apply for the Family Controls entitlement as early as possible. It is required for DeviceActivity monitoring (Phase 1/2) and app blocking (Phase 5). Approval can take time and will block development if not requested early.
@@ -30,7 +30,7 @@ These are runtime permission prompts shown to the user.
 | Notifications | Threshold alerts, reminders, nudges | Before first notification feature | Local notification features disabled; push disabled |
 | Location (When In Use) | Settings location lock | When user enables the feature in settings | Location lock feature unavailable |
 
-> TODO: Design the permission request flow in onboarding. Screen Time permission is the most critical — decide whether to gate the entire app on it or allow limited use without it.
+Permission request flow is implemented in `PermissionsView.swift` as part of the onboarding sequence. Screen Time is skippable with a warning; notifications are skippable silently. Both can be granted later via Settings.
 
 > TODO: Write the usage description strings for Info.plist (`NSLocationWhenInUseUsageDescription`, etc.) with clear, user-friendly explanations of why each permission is needed.
 

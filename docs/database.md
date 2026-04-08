@@ -24,6 +24,23 @@ You cannot read raw usage numbers directly in the main app target. Data is acces
 
 ---
 
+## Schema SQL
+
+The full schema (tables, enums, indexes, RLS policies, and profile trigger) is in `supabase/schema.sql`. Run it in the Supabase SQL editor to set up the database.
+
+---
+
+## Column Naming Convention
+
+All database columns use **snake_case** (e.g. `first_name`, `bundle_id`, `limit_seconds`). The Supabase Swift SDK automatically converts snake_case → camelCase when decoding, so Swift models use camelCase properties without needing explicit `CodingKeys` — as long as the property names match the camelCase equivalents exactly.
+
+The column names in the schema tables below use camelCase for readability. The actual SQL uses snake_case. For example:
+- Doc shows: `firstName` → SQL has: `first_name` → Swift sees: `firstName`
+
+The existing `AppUsage.swift` and `Goal.swift` models were written before the schema was finalized and **do not yet match the DB column names**. They will need to be updated when the data layer is built in Phase 2.
+
+---
+
 ## Auth Strategy
 
 Supabase Auth manages authentication via its own internal `auth.users` table (UUID primary key, email, hashed password). We do not build our own auth table.
