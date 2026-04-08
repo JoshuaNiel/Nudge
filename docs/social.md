@@ -22,14 +22,14 @@ Stores the app user's contacts. No Supabase account required for the friend.
 | friendName | varchar | Display name |
 | friendPhoneNumber | varchar | E.164 format (`+18015551234`) |
 | status | enum | `pending`, `accepted`, `blocked` |
-| timestamp | timestamptz | UTC — when the consent SMS was sent |
+| invitationTimestamp | timestamptz | UTC — when the consent SMS was sent |
 
 **On `status`:**
 - `pending` — consent SMS has been sent, awaiting reply
 - `accepted` — friend replied yes; nudges can be sent
-- `blocked` — friend replied no or sent STOP; row is kept for history but no nudges are sent
+- `blocked` — friend sent Twilio STOP; row is kept permanently, no nudges are sent
 
-**On rejection:** If the friend replies no, a notification is sent to the app user and the row is deleted. `blocked` is reserved for explicit opt-outs (Twilio STOP) where regulations require you to honor the request permanently.
+**On rejection:** If the friend replies no, a notification is sent to the app user and the row is deleted. `blocked` is reserved exclusively for Twilio STOP opt-outs where regulations require honoring the request permanently.
 
 ### `nudge`
 Tracks each SMS nudge sent to a friend and their reply.
@@ -40,9 +40,9 @@ Tracks each SMS nudge sent to a friend and their reply.
 | friendId | bigint | FK → friend(id) |
 | prompt | varchar | The message options sent to the friend |
 | friendReply | varchar | The friend's reply text (populated by webhook) |
-| type | enum | `shame`, `encouragement` |
-| status | enum | `sent_to_friend`, `replied`, `delivered_to_user`, `failed` |
-| timestamp | timestamptz | UTC — when the nudge was sent |
+| type | enum | `shame`, `encouragement`, `custom` |
+| status | enum | `sent_to_friend`, `replied`, `reply_delivered`, `failed` |
+| sentTimestamp | timestamptz | UTC — when the nudge was sent |
 
 **Note:** The app user is derivable via `friend.userId` — no separate `receiverId` column needed on `nudge`.
 
@@ -91,13 +91,14 @@ Only runs for friends with `status = accepted`.
          ↓
 5. receive-reply Edge Function (inbound webhook) routes the reply:
    — No pending friend row for this number → treat as nudge reply
-   — Maps to most recent sent_to_friend nudge for that phone number
+   — A phone number may appear in multiple users' friend lists; the reply goes
+     to the most recent sent_to_friend nudge across all matching friend rows
    — Updates nudge.friendReply and nudge.status = replied
          ↓
 6. Edge Function delivers reply to app user:
    a. APNs push notification (if app is installed and notifications enabled)
    b. SMS to profiles.phoneNumber
-   — Updates nudge.status = delivered_to_user
+   — Updates nudge.status = reply_delivered
 ```
 
 ---
@@ -106,13 +107,11 @@ Only runs for friends with `status = accepted`.
 
 The `receive-reply` Edge Function handles all inbound SMS and routes based on the sender's phone number:
 
-1. Look up `friend` row by `friendPhoneNumber`
-2. If `friend.status = pending` → this is a consent reply → handle as friend request response
-3. Otherwise → this is a nudge reply → find most recent `nudge` with `status = sent_to_friend` for that `friend.id`
+1. Look up all `friend` rows matching `friendPhoneNumber` (a phone number may appear across multiple users' friend lists)
+2. If any matching row has `friend.status = pending` → this is a consent reply → handle as friend request response for that user
+3. Otherwise → this is a nudge reply → find the single most recent `nudge` with `status = sent_to_friend` across all matching friend rows; that nudge's owner receives the reply
 
-This keeps routing unambiguous: a phone number can't have a pending consent and an active nudge at the same time (nudges are only sent to accepted friends).
-
-> TODO: Decide whether to enforce a "one active nudge per friend" constraint at the app level, or handle the edge case in the Edge Function by taking the most recent `timestamp`.
+This keeps routing unambiguous: a phone number can't have a pending consent and an active nudge at the same time (nudges are only sent to accepted friends). In the multi-user case, the most recent outstanding nudge wins.
 
 ---
 
