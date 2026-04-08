@@ -11,6 +11,9 @@ xcuserdata/
 # Xcode — build artifacts
 DerivedData/
 
+# Secrets
+Nudge/Config.xcconfig
+
 # Claude Code — local settings and generated skills
 .claude/settings.local.json
 .claude/skills/

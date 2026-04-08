@@ -1,14 +1,25 @@
 import Foundation
-// import Supabase  // Uncomment after adding the Supabase Swift package via SPM
+import Supabase
 
-// Add the Supabase package in Xcode:
-// File → Add Package Dependencies → https://github.com/supabase/supabase-swift
+private enum SupabaseConfig {
+    static let url: URL = {
+        guard let string = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String,
+              let url = URL(string: string) else {
+            fatalError("SUPABASE_URL missing or invalid in Info.plist")
+        }
+        return url
+    }()
 
-enum SupabaseConfig {
-    static let url = URL(string: "YOUR_SUPABASE_URL")!
-    static let anonKey = "YOUR_SUPABASE_ANON_KEY"
+    static let publishableKey: String = {
+        guard let key = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_PUBLISHABLE_KEY") as? String,
+              !key.isEmpty else {
+            fatalError("SUPABASE_PUBLISHABLE_KEY missing in Info.plist")
+        }
+        return key
+    }()
 }
 
-// Once the package is added, replace the above with:
-// import Supabase
-// let supabase = SupabaseClient(supabaseURL: SupabaseConfig.url, supabaseKey: SupabaseConfig.anonKey)
+let supabase = SupabaseClient(
+    supabaseURL: SupabaseConfig.url,
+    supabaseKey: SupabaseConfig.publishableKey
+)
