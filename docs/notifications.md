@@ -9,9 +9,11 @@ Strategy for all notifications in the Nudge app — both local and push.
 | Type | Use Case | Mechanism |
 |---|---|---|
 | Local notifications | Usage thresholds, goal reminders, why reminders, unlock prompts | `UserNotifications` framework, scheduled on-device |
-| Push notifications (APNs) | Social nudges from friends | APNs via Supabase Edge Functions |
+| Push notifications (APNs) | Delivering a friend's SMS reply to the app user | APNs via Supabase Edge Function |
 
 Local notifications require no server. Push notifications require APNs setup and a server-side trigger.
+
+**Note on social nudges:** Outbound nudges to friends are sent via SMS (Twilio), not push notifications — friends don't have the app. APNs is used only to deliver the friend's reply *back* to the app user. The app user also receives the reply as an SMS to their phone number stored in `profiles.phoneNumber`. See `social.md` for the full flow.
 
 ---
 
@@ -52,20 +54,20 @@ A prompt shown when the user unlocks their phone asking whether they're being pr
 
 ## Push Notifications (APNs)
 
-Used exclusively for the social layer — shame and encouragement nudges between friends.
+Used to deliver a friend's SMS reply back to the app user when the app is installed.
 
 > TODO: Document APNs setup before Phase 6.
 > - APNs certificate or token-based auth (p8 key)? Token-based is recommended.
-> - How are device tokens collected and stored? (Likely a `device_tokens` table in Supabase)
-> - What triggers a push? A Supabase Edge Function listening to inserts on the `nudges` table via a database webhook?
+> - How are device tokens collected and stored? (A `device_tokens` table in Supabase, or stored on `profiles`)
+> - The `receive-reply` Edge Function (triggered by Twilio inbound webhook) sends the APNs push after updating the nudge row.
 
 ### Proposed Flow
-1. User A taps "Nudge" on User B in the friends list
-2. App inserts a row into `nudges` table
-3. Supabase database webhook triggers an Edge Function
-4. Edge Function sends APNs push to User B's device token(s)
+1. Twilio inbound webhook fires when a friend replies to the SMS nudge
+2. `receive-reply` Edge Function maps the reply to the correct nudge row
+3. Edge Function sends APNs push to the app user's device token
+4. Edge Function also sends SMS to `profiles.phoneNumber` as a fallback
 
-> TODO: Design the Edge Function. What payload does the push notification carry? Does it deep-link into the app?
+> TODO: Design the push payload. Should it deep-link into the nudge history screen in the app?
 
 ---
 

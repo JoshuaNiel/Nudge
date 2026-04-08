@@ -100,13 +100,16 @@ create policy "Users can manage their own rows"
 
 ### Special cases:
 
-- **`friends`** — a user needs to read rows where they are either `requesterId` or `addresseeId`:
+- **`friend`** — users only see their own contacts (`user_id = auth.uid()`). Standard pattern applies.
+- **`nudge`** — no direct `user_id` column. RLS must join through `friend`:
   ```sql
-  using (auth.uid() = "requesterId" or auth.uid() = "addresseeId")
-  ```
-- **`nudges`** — a user needs to read rows where they are either `senderId` or `receiverId`:
-  ```sql
-  using (auth.uid() = "senderId" or auth.uid() = "receiverId")
+  using (
+    exists (
+      select 1 from friend
+      where friend.id = nudge.friend_id
+      and friend.user_id = auth.uid()
+    )
+  )
   ```
 - **`app`** — readable by all authenticated users (global registry); writable only by the system (no user-facing inserts):
   ```sql

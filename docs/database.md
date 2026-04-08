@@ -63,6 +63,7 @@ Extends Supabase Auth with user-specific settings.
 | user_id | uuid | FK → auth.users(id), PK |
 | firstName | varchar | |
 | lastName | varchar | |
+| phoneNumber | varchar | E.164 format — used to receive friend SMS replies |
 | weekStart | int | 0 = Sunday, 1 = Monday, etc. |
 | timeZone | varchar | IANA timezone string (e.g. `America/Denver`) |
 | settingsLocationLat | double precision | For location-based settings lock |
@@ -139,28 +140,34 @@ Motivational reminders sent as notifications to help users stay intentional. Not
 | userId | uuid | FK → auth.users(id) |
 | message | varchar | The reminder text |
 
-### `friends`
-Self-referential friendship table. Directional at creation (requester → addressee), symmetric once accepted.
-
-| Column | Type | Notes |
-|---|---|---|
-| requesterId | uuid | FK → auth.users(id) |
-| addresseeId | uuid | FK → auth.users(id) |
-| status | enum | `pending`, `accepted`, `blocked` |
-
-**Naming note:** `addresseeId` is the person receiving the request. `status` tracks whether they've accepted — the column name does not imply acceptance.
-
-### `nudges`
-Shame and encouragement messages sent between friends.
+### `friend`
+Stores the app user's contacts. Friends do not need a Supabase account or the app installed.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | bigint | PK |
-| senderId | uuid | FK → auth.users(id) |
-| receiverId | uuid | FK → auth.users(id) |
-| message | varchar | |
-| timestamp | timestamptz | UTC |
+| userId | uuid | FK → auth.users(id) — the app user who added this contact |
+| friendName | varchar | Display name |
+| friendPhoneNumber | varchar | E.164 format (`+18015551234`) |
+| status | enum | `pending`, `accepted`, `blocked` |
+| timestamp | timestamptz | UTC — when the consent SMS was sent |
+
+**On `status`:** `pending` while awaiting consent reply; `accepted` once friend confirms; `blocked` for Twilio STOP opt-outs. Friends who reply no are deleted outright — no row retained.
+
+### `nudge`
+Tracks each SMS nudge sent to a friend and the friend's reply.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | bigint | PK |
+| friendId | bigint | FK → friend(id) |
+| prompt | varchar | The message options sent to the friend via SMS |
+| friendReply | varchar | The friend's reply text (populated by Twilio webhook) |
 | type | enum | `shame`, `encouragement` |
+| status | enum | `sent_to_friend`, `replied`, `delivered_to_user`, `failed` |
+| timestamp | timestamptz | UTC — when the nudge was sent |
+
+**Note:** The app user is derivable via `friend.userId` — no separate receiver column is needed on `nudge`.
 
 ---
 
@@ -205,5 +212,5 @@ When evaluating a weekly goal, compute the week's start and end as UTC timestamp
 | Real-time today's usage | DeviceActivity | No — read on-device only |
 | Auth / identity | Supabase Auth | Managed by Supabase |
 | Goals and reminders | App-defined | Yes |
-| Friend connections | App-defined | Yes |
-| Social nudges | App-defined | Yes |
+| Friend contacts | App-defined (name + phone) | Yes — friends don't need the app |
+| SMS nudges and replies | Twilio webhook | Yes — in `nudge` table |
