@@ -12,5 +12,7 @@
 | 2026-03-29 | 0.5         | Create git project and feature list            |
 | 2026-04-06 | 1.0         | Planning session: finalized tech stack (Swift/SwiftUI + Supabase), scoped and categorized features, defined 7 build phases, updated README |
 | 2026-04-06 | 1.0         | Created Xcode project (Nudge), set up folder structure, built starter files (tab navigation, models, feature stubs, Supabase client skeleton) |
+| 2026-04-07 | 1.0          | Swift Tutorials |
+
 
 ---

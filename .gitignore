@@ -1,1 +1,17 @@
 claude-prompts-txt
+
+# macOS
+.DS_Store
+
+# Xcode — user-specific
+xcuserdata/
+*.xcuserstate
+**/*.xcworkspace/xcuserdata/
+
+# Xcode — build artifacts
+DerivedData/
+
+# Claude Code — local settings and generated skills
+.claude/settings.local.json
+.claude/skills/
+.agents/
