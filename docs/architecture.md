@@ -94,6 +94,18 @@ Supabase credentials are stored in `Config.xcconfig` (gitignored) and exposed to
 
 ---
 
+## Platform
+
+| | |
+|---|---|
+| Minimum deployment target | iOS 17 |
+| Primary language | Swift |
+| UI framework | SwiftUI |
+
+All APIs used (DeviceActivity, FamilyControls, Swift Charts, `AuthorizationCenter`) are available on iOS 15+, so iOS 17 imposes no additional API constraints.
+
+---
+
 ## Dependency Management
 
 Swift Package Manager only. No CocoaPods or Carthage.
