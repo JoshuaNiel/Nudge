@@ -162,10 +162,13 @@ class MyFeatureViewModel: ObservableObject {
 
 Instantiated in the view as `@StateObject`.
 
+ViewModel files must `import Combine` — `ObservableObject` and `@Published` require it.
+
 ---
 
 ## Services
 
+- All service files that make Supabase calls must `import Supabase` — without it, `.from()`, `.eq()`, `.execute()`, `.value` etc. will fail to compile
 - All Supabase calls go in a service class, never directly in a view or ViewModel
 - Services are `@MainActor` classes with `async throws` methods
 - No state — services are stateless; state lives in AppState or ViewModels
@@ -191,7 +194,7 @@ class MyService {
 
 - Plain `struct`, `Codable`, `Identifiable`
 - Property names are camelCase — Supabase Swift SDK auto-converts from snake_case
-- No explicit `CodingKeys` needed as long as the camelCase property matches the snake_case column exactly. Exception: columns containing acronyms (e.g. `some_url`) won't convert correctly — use explicit `CodingKeys` for those.
+- Always use explicit `CodingKeys` with snake_case string values for any model that is read from or written to Supabase. Do not rely on automatic `convertFromSnakeCase` — it is not consistently applied across SDK versions and produces silent decoding failures. Both `Encodable` insert structs and `Codable` read models need explicit keys.
 - Enums for DB enum columns: `String`, `Codable`, cases match the DB enum values exactly
 
 ```swift

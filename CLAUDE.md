@@ -21,6 +21,13 @@ Reference docs (read only when relevant):
 - `docs/auth.md` — auth flow and onboarding sequence
 - `docs/entitlements.md` — required entitlements and permission request flow
 
+## Code quality
+
+After writing or editing any Swift code, check the diagnostics reported by the IDE. If there are build errors (not SourceKit indexing errors), fix them before considering the task done. Iterate until there are zero build errors.
+
+**Distinguishing real errors from stale SourceKit errors:**
+Stale SourceKit errors look like "Cannot find type 'X' in scope" or "Cannot find 'supabase' in scope" immediately after creating new files — these resolve automatically when Xcode re-indexes and are not real build errors. Real build errors persist after indexing and reference logic issues (type mismatches, missing arguments, protocol conformance failures, etc.). When in doubt, note the ambiguity to the user rather than ignoring all errors.
+
 ## End of every session
 
 Update `docs/STATUS.md`, `docs/decisions.md`, `docs/ProgressLog.md`, and any other relevant documentation to reflect what was completed, what's in progress, and any new blockers or open decisions discovered. Add bugs and future feature ideas to `docs/backlog.md`.

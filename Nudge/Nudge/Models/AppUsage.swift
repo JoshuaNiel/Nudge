@@ -1,19 +1,31 @@
 import Foundation
 
-struct AppUsage: Identifiable, Codable {
-    let id: UUID
-    let bundleID: String
-    let appName: String
-    let category: String?
-    let durationSeconds: Int
-    let date: Date
+struct AppUsage: Codable, Identifiable {
+    let id: Int
+    let userId: UUID       // user_id
+    let date: String       // "YYYY-MM-DD" local date in user's timezone
+    let appId: String      // app_id (FK → app.bundle_id)
+    let seconds: Int
+    let pickups: Int
+}
 
-    init(id: UUID = UUID(), bundleID: String, appName: String, category: String? = nil, durationSeconds: Int, date: Date = .now) {
-        self.id = id
-        self.bundleID = bundleID
-        self.appName = appName
-        self.category = category
-        self.durationSeconds = durationSeconds
-        self.date = date
-    }
+struct AppRecord: Codable, Identifiable {
+    let bundleId: String   // PK
+    let name: String
+    var id: String { bundleId }
+}
+
+struct AppUsageWithName: Codable, Identifiable {
+    let id: Int
+    let appId: String      // app_id
+    let appName: String    // joined from app.name
+    let date: String
+    let seconds: Int
+    let pickups: Int
+}
+
+struct DailyTotal: Identifiable {
+    let date: String       // "YYYY-MM-DD"
+    let seconds: Int
+    var id: String { date }
 }

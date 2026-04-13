@@ -1,19 +1,59 @@
 import Foundation
 
-struct Goal: Identifiable, Codable {
-    let id: UUID
-    var title: String
-    var reason: String         // "why" reminder shown in notifications
-    var dailyLimitMinutes: Int
-    var appBundleIDs: [String] // which apps this goal applies to
-    var createdAt: Date
+// MARK: - Enums
 
-    init(id: UUID = UUID(), title: String, reason: String, dailyLimitMinutes: Int, appBundleIDs: [String] = [], createdAt: Date = .now) {
-        self.id = id
-        self.title = title
-        self.reason = reason
-        self.dailyLimitMinutes = dailyLimitMinutes
-        self.appBundleIDs = appBundleIDs
-        self.createdAt = createdAt
+enum GoalFrequency: String, Codable {
+    case daily
+    case weekly
+    case monthly
+}
+
+enum GoalTargetType: String, Codable {
+    case app
+    case category
+    case total
+}
+
+// MARK: - Goal
+
+struct Goal: Codable, Identifiable {
+    let id: Int
+    let userId: UUID
+    let limitSeconds: Int
+    let frequency: GoalFrequency
+    let targetType: GoalTargetType
+    let bundleId: String?
+    let categoryId: Int?
+    let temporary: Bool
+    let startDate: String?
+    let endDate: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId       = "user_id"
+        case limitSeconds = "limit_seconds"
+        case frequency
+        case targetType   = "target_type"
+        case bundleId     = "bundle_id"
+        case categoryId   = "category_id"
+        case temporary
+        case startDate    = "start_date"
+        case endDate      = "end_date"
     }
+}
+
+// MARK: - AppCategory
+
+struct AppCategory: Codable, Identifiable {
+    let id: Int
+    let userId: UUID    // user_id
+    let name: String
+    let color: String   // hex "#RRGGBB"
+}
+
+// MARK: - AppCategoryMember
+
+struct AppCategoryMember: Codable {
+    let bundleId: String    // bundle_id
+    let categoryId: Int     // category_id
 }
