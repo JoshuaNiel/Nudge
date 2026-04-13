@@ -41,8 +41,8 @@ class AuthService {
         }
 
         try await supabase
-            .from("profiles")
-            .update(["firstName": firstName, "lastName": lastName])
+            .from("profile")
+            .update(["first_name": firstName, "last_name": lastName])
             .eq("user_id", value: userId)
             .execute()
     }

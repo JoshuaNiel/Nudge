@@ -21,5 +21,8 @@ private enum SupabaseConfig {
 
 let supabase = SupabaseClient(
     supabaseURL: SupabaseConfig.url,
-    supabaseKey: SupabaseConfig.publishableKey
+    supabaseKey: SupabaseConfig.publishableKey,
+    options: .init(
+        auth: .init(emitLocalSessionAsInitialSession: true)
+    )
 )
