@@ -19,7 +19,11 @@ class AppState: ObservableObject {
     private func observeAuthState() async {
         for await (event, session) in supabase.auth.authStateChanges {
             switch event {
-            case .initialSession, .signedIn, .tokenRefreshed, .userUpdated:
+            case .initialSession:
+                currentUser = session?.user
+                isAuthenticated = session != nil
+                isLoading = false
+            case .signedIn, .tokenRefreshed, .userUpdated:
                 currentUser = session?.user
                 isAuthenticated = session != nil
             case .signedOut, .passwordRecovery, .userDeleted:
@@ -28,7 +32,6 @@ class AppState: ObservableObject {
             default:
                 break
             }
-            isLoading = false
         }
     }
 }
