@@ -46,14 +46,26 @@ struct Goal: Codable, Identifiable {
 
 struct AppCategory: Codable, Identifiable {
     let id: Int
-    let userId: UUID    // user_id
+    let userId: UUID
     let name: String
     let color: String   // hex "#RRGGBB"
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case name
+        case color
+    }
 }
 
 // MARK: - AppCategoryMember
 
 struct AppCategoryMember: Codable {
-    let bundleId: String    // bundle_id
-    let categoryId: Int     // category_id
+    let bundleId: String
+    let categoryId: Int
+
+    enum CodingKeys: String, CodingKey {
+        case bundleId    = "bundle_id"
+        case categoryId  = "category_id"
+    }
 }

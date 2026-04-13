@@ -220,6 +220,184 @@ enum MyStatus: String, Codable {
 
 ---
 
+## Testing
+
+### Test-First Pattern
+
+For every new feature, write tests **before** implementing. The cycle:
+
+1. Write tests that cover the contract (model coding, business logic, computed properties)
+2. Run — all new tests should fail
+3. Implement until all tests pass
+4. Run again to confirm no regressions
+
+### Test File Location
+
+All tests live in `NudgeTests/feature.swift`. The structure should mimic the normal repo strucutre.
+
+### Running Tests (CLI)
+
+```bash
+xcodebuild test \
+  -project Nudge.xcodeproj \
+  -scheme Nudge \
+  -destination 'platform=iOS Simulator,arch=arm64,id=19C7BD9B-6973-4F63-8492-C8D13401B835'
+```
+
+Filter to a single suite: append `-only-testing:NudgeTests/GoalCodingTests`
+
+### What to Test
+
+| Category | What | How |
+|---|---|---|
+| Model decoding | Decode from snake_case JSON (as Supabase returns) — verify all properties | `JSONDecoder` + literal JSON string |
+| Model encoding | Encode to JSON — snake_case keys present, camelCase absent | `JSONEncoder` + `JSONSerialization` key check |
+| Enum raw values | Each case matches the DB enum string exactly | `#expect(MyEnum.case.rawValue == "db_string")` |
+| Computed properties | Boundary values for `progressFraction`, `isExceeded`, etc. | Direct struct init, no mocking needed |
+| Formatters | `formattedDuration` and any display helpers | Direct call on known inputs |
+| Service behavior | Correct args passed, returned data flows to ViewModel state | Mock service conforming to service protocol (see below) |
+| ViewModel loading state | `isLoading` true during fetch, false after; `error` set on throw | Inject slow/throwing mock, check `@Published` state |
+| Input validation | Error message set and early return on invalid input | Call action method directly on view or ViewModel |
+
+---
+
+### Service Protocols and Mocking
+
+Services are not tested against real Supabase — that would require a live network and seed data. Instead:
+
+- Each service has a **protocol** listing its `async throws` methods
+- The real service conforms to the protocol
+- Tests inject a **mock** that conforms to the same protocol
+
+**Define a protocol alongside each service:**
+
+```swift
+// GoalService.swift
+protocol GoalServiceProtocol {
+    func fetchGoals(userId: UUID) async throws -> [Goal]
+    func createGoal(_ goal: GoalInsert) async throws
+    func deleteGoal(id: Int, userId: UUID) async throws
+}
+
+@MainActor
+class GoalService: GoalServiceProtocol { ... }
+```
+
+**ViewModel accepts the protocol, defaults to the real service:**
+
+```swift
+class GoalsViewModel: ObservableObject {
+    private let goalService: GoalServiceProtocol
+    private let evaluationService: GoalEvaluationServiceProtocol
+
+    init(
+        goalService: GoalServiceProtocol = GoalService(),
+        evaluationService: GoalEvaluationServiceProtocol = GoalEvaluationService()
+    ) {
+        self.goalService = goalService
+        self.evaluationService = evaluationService
+    }
+    ...
+}
+```
+
+**Mock in the test file (not a separate file — keep it local to the suite):**
+
+```swift
+private final class MockGoalService: GoalServiceProtocol {
+    var goalsToReturn: [Goal] = []
+    var errorToThrow: Error? = nil
+    var deletedIds: [Int] = []
+
+    func fetchGoals(userId: UUID) async throws -> [Goal] {
+        if let error = errorToThrow { throw error }
+        return goalsToReturn
+    }
+
+    func createGoal(_ goal: GoalInsert) async throws {
+        if let error = errorToThrow { throw error }
+    }
+
+    func deleteGoal(id: Int, userId: UUID) async throws {
+        if let error = errorToThrow { throw error }
+        deletedIds.append(id)
+    }
+}
+```
+
+**What to test with mocks:**
+
+```swift
+@Suite("GoalsViewModel")
+@MainActor
+struct GoalsViewModelTests {
+
+    @Test func loadsGoalsIntoState() async throws {
+        let mock = MockGoalService()
+        mock.goalsToReturn = [/* test goals */]
+        let vm = GoalsViewModel(goalService: mock)
+
+        await vm.load(userId: UUID())
+
+        #expect(vm.goals.count == mock.goalsToReturn.count)
+        #expect(vm.isLoading == false)
+        #expect(vm.error == nil)
+    }
+
+    @Test func setsErrorOnServiceFailure() async throws {
+        let mock = MockGoalService()
+        mock.errorToThrow = URLError(.notConnectedToInternet)
+        let vm = GoalsViewModel(goalService: mock)
+
+        await vm.load(userId: UUID())
+
+        #expect(vm.error != nil)
+        #expect(vm.goals.isEmpty)
+    }
+
+    @Test func deleteRemovesGoalFromState() async throws {
+        let mock = MockGoalService()
+        let goal = /* test goal */
+        mock.goalsToReturn = [goal]
+        let vm = GoalsViewModel(goalService: mock)
+        await vm.load(userId: UUID())
+
+        await vm.deleteGoal(goal.goal, userId: UUID())
+
+        #expect(vm.goals.isEmpty)
+        #expect(mock.deletedIds == [goal.id])
+    }
+}
+```
+
+**Rules:**
+- Mock classes are `private final class`, defined inside the test file that uses them — never in production code.
+- Mocks capture call arguments (e.g., `deletedIds`) so tests can assert the service was called correctly.
+- Do not test that the real service calls the right Supabase table — that is covered by the CodingKeys encode/decode tests plus end-to-end manual testing.
+
+### Test File Conventions
+
+```swift
+import Testing
+import Foundation
+@testable import Nudge
+
+@Suite("Feature Name")
+@MainActor                          // required: SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor
+struct FeatureTests {
+
+    @Test func specificBehavior() throws {
+        #expect(value == expected)
+    }
+}
+```
+
+- `@MainActor` is required on every `@Suite` struct — the project-wide `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` makes models `@MainActor`, and omitting this annotation produces actor-isolation warnings.
+- Use `throws` on test functions that call `JSONDecoder.decode` or `JSONEncoder.encode`.
+- Use `#expect(...)` not `XCTAssert*` — this project uses Swift Testing, not XCTest.
+
+---
+
 ## Spacing & Layout Constants
 
 Consistent values used throughout:

@@ -14,7 +14,12 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 
 ---
 
+## Infrastructure Tasks
+
+- **Service protocol + mock infrastructure** — Add a `Protocol` alongside each service (`GoalServiceProtocol`, `UsageServiceProtocol`, `CategoryServiceProtocol`, `GoalEvaluationServiceProtocol`). Update ViewModel inits to accept the protocol type, defaulting to the real service. This unlocks ViewModel unit tests (loading state, error handling, delete behavior) as described in `docs/conventions.md` → Service Protocols and Mocking.
+
+---
+
 ## Known Bugs / Tech Debt
 
 - **Email confirmation deep link not wired up** — Supabase sends a `localhost` confirmation URL. Fix: register `nudge://` URL scheme, set Site URL + Redirect URLs in Supabase dashboard, handle `.onOpenURL` in `NudgeApp.swift` calling `supabase.auth.session(from: url)`. Email confirmation is currently disabled in Supabase for development.
-- **`AppUsage.swift` and `Goal.swift` models don't match DB schema** — written before the schema was finalized. Fix tracked in phase-2 and phase-3 specs respectively.

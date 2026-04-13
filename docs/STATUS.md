@@ -13,6 +13,12 @@ Family Controls is a restricted entitlement requiring both a paid Apple Develope
 
 **Parallel track: Phase 3 — Goals** `[ ] Ready to start`
 
+**Testing infrastructure** `[x] Done` — `NudgeTests` target with 22 passing tests (model coding, business logic). Run with:
+```
+xcodebuild test -project Nudge.xcodeproj -scheme Nudge \
+  -destination 'platform=iOS Simulator,arch=arm64,id=19C7BD9B-6973-4F63-8492-C8D13401B835'
+```
+
 ---
 
 ## Phase Summary
@@ -47,7 +53,7 @@ All core auth and onboarding work is complete.
 
 **Known gaps (not blocking):**
 - [ ] Email confirmation deep link (`nudge://` URL scheme) — see `specs/phase-0-auth-gaps.md` TODO list
-- [ ] `AppUsage.swift` and `Goal.swift` models don't yet match DB column names — fix in Phase 2 and 3 respectively
+- [x] `AppUsage.swift` and `Goal.swift` models match DB column names — explicit CodingKeys added to all models
 
 ---
 

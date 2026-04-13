@@ -2,17 +2,31 @@ import Foundation
 
 struct AppUsage: Codable, Identifiable {
     let id: Int
-    let userId: UUID       // user_id
+    let userId: UUID
     let date: String       // "YYYY-MM-DD" local date in user's timezone
-    let appId: String      // app_id (FK → app.bundle_id)
+    let appId: String      // FK → app.bundle_id
     let seconds: Int
     let pickups: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId   = "user_id"
+        case date
+        case appId    = "app_id"
+        case seconds
+        case pickups
+    }
 }
 
 struct AppRecord: Codable, Identifiable {
     let bundleId: String   // PK
     let name: String
     var id: String { bundleId }
+
+    enum CodingKeys: String, CodingKey {
+        case bundleId = "bundle_id"
+        case name
+    }
 }
 
 struct AppUsageWithName: Codable, Identifiable {
@@ -22,6 +36,15 @@ struct AppUsageWithName: Codable, Identifiable {
     let date: String
     let seconds: Int
     let pickups: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case appId   = "app_id"
+        case appName = "app_name"
+        case date
+        case seconds
+        case pickups
+    }
 }
 
 struct DailyTotal: Identifiable {

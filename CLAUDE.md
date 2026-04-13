@@ -21,6 +21,25 @@ Reference docs (read only when relevant):
 - `docs/auth.md` — auth flow and onboarding sequence
 - `docs/entitlements.md` — required entitlements and permission request flow
 
+## Test-driven development (TDD)
+
+For every new feature: **write tests first, then implement.**
+
+1. Add `@Suite` + `@Test` cases to `NudgeTests/NudgeTests.swift` covering the new contracts (model coding, business logic, computed properties, enum raw values).
+2. Run the test suite — new tests must fail before implementation.
+3. Implement until all tests pass.
+4. Run again to confirm no regressions.
+
+Run the full test suite:
+```bash
+xcodebuild test \
+  -project Nudge.xcodeproj \
+  -scheme Nudge \
+  -destination 'platform=iOS Simulator,arch=arm64,id=19C7BD9B-6973-4F63-8492-C8D13401B835'
+```
+
+See `docs/conventions.md` → Testing section for test file conventions.
+
 ## Code quality
 
 After writing or editing any Swift code, check the diagnostics reported by the IDE. If there are build errors (not SourceKit indexing errors), fix them before considering the task done. Iterate until there are zero build errors.
