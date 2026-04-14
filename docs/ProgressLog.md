@@ -1,6 +1,6 @@
 # Progress Log
 
-> **Total Hours to Date:** 18
+> **Total Hours to Date:** 23.5
 
 ---
 
@@ -18,5 +18,7 @@
 | 2026-04-08 | 1.0          | Debugging and setting up auth flow through supabase and app |
 | 2026-04-12 | 4.0  | Set up Apple Developer Account, built spec docs to help claude work effectively, and built out Goals feature |
 | 2026-04-13 | 1.5  | Set up NudgeTests unit test target and test infrastructure. Added explicit CodingKeys to all Supabase models (AppUsage, AppRecord, AppUsageWithName, AppCategory, AppCategoryMember). Wrote 22 passing tests across 5 suites: model encode/decode correctness, GoalWithProgress logic, Int.formattedDuration. Updated CLAUDE.md and conventions.md with TDD-first pattern. |
+| 2026-04-13 | 2.0  | Set up Twilio (trial account, verified numbers) and APNs (token-based auth, .p8 key). Stored all credentials as Supabase Vault secrets. Configured Supabase DB webhook for send-consent and Twilio inbound webhook for receive-reply. |
+| 2026-04-13 | 3.5  | Built full Phase 5 Social layer. iOS: Social.swift models (Friend, FriendInsert, Nudge with nullable NudgeType, all enums with CodingKeys), FriendService + NudgeService with protocols, SocialViewModel (two-init pattern), SocialView replacement (friend list, AddFriendSheet with E.164 validation, NudgeHistoryView). Supabase: _shared/twilio.ts (sendSms, Twilio HMAC-SHA1 signature validation), _shared/apns.ts (sendApnsPush, ES256 JWT via Web Crypto), send-consent, send-nudge (timezone-aware rate limit, nullable type), receive-reply (consent + nudge reply routing, APNs + SMS delivery). DB migrations: device_tokens table, nudge.type made nullable. All three Edge Functions deployed. 43 passing tests. |
 
 ---

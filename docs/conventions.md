@@ -146,7 +146,13 @@ class MyFeatureViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var error: String? = nil
 
-    private let service = MyService()
+    private let service: MyServiceProtocol
+
+    // Production init — no default parameter (see below)
+    init() { self.service = MyService() }
+
+    // Testing init — inject a mock
+    init(service: MyServiceProtocol) { self.service = service }
 
     func load() async {
         isLoading = true
@@ -161,6 +167,16 @@ class MyFeatureViewModel: ObservableObject {
 ```
 
 Instantiated in the view as `@StateObject`.
+
+**Important — two-init pattern required with `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`:**
+
+Do NOT write a single init with a default parameter value:
+```swift
+// WRONG — produces "Call to main actor-isolated initializer in a synchronous nonisolated context"
+init(service: MyServiceProtocol = MyService()) { ... }
+```
+
+Use two separate inits instead: a no-argument production init and an explicit injection init for tests. This is because the default expression (`MyService()`) is evaluated in a nonisolated context when the parameter is defaulted, which violates the `@MainActor` isolation of `MyService.init()`.
 
 ViewModel files must `import Combine` — `ObservableObject` and `@Published` require it.
 
