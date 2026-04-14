@@ -4,6 +4,20 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 
 ---
 
+## Phase 5 — Remaining Social Work
+
+- **APNs iOS registration** — Enable Push Notifications capability in Xcode, call `registerForRemoteNotifications()` in `NudgeApp.swift`, implement `DeviceTokenService` that upserts the token into `device_tokens`. Handle incoming push payload to deep-link to `NudgeHistoryView` for the relevant friend (nudge_id in payload).
+
+- **User phone number in Settings** — Add phone number field to Settings → Profile. E.164 validation. Save to `profile.phone_number` via `AuthService.updateProfile`. Display note explaining it's used only for SMS reply delivery.
+
+- **Nudge trigger system** — The core of the social feature. Automatically sends nudges when: (a) continuous phone usage exceeds a threshold (e.g. 60 min), (b) a goal is breached, (c) daily report time fires. Requires Phase 1 (Family Controls entitlement). Needs its own spec before implementation — see open questions in `specs/phase-5-social.md` §5E.
+
+- **Nudge trigger settings UI** — Settings screen for configuring which triggers are active, thresholds (time-on-phone minutes, daily total hours), and daily report time. Per-friend trigger configuration is a stretch goal.
+
+- **Real-time nudge status updates** — Subscribe to `nudge` table changes via Supabase Realtime so `NudgeHistoryView` updates automatically when `status` changes to `replied` or `reply_delivered`.
+
+---
+
 ## Future Features
 
 - **Mac sync** — sync usage data and goals across Mac using the same Supabase backend

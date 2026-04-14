@@ -97,3 +97,35 @@ Settled decisions and their rationale. Do not re-litigate these without good rea
 ### ADR-021: MVVM + Service Layer
 **Decision:** Views (SwiftUI, no logic) → ViewModels (state, data transformation) → Services (Supabase calls, DeviceActivity) → Models (plain Codable structs).
 **Why:** Clean separation of concerns. Services are testable in isolation. Views are simple and declarative.
+
+---
+
+## Social / Nudge System
+
+### ADR-022: Nudges are automatic — not user-initiated
+**Decision:** The app automatically sends nudges to friends when triggers fire (time-on-phone threshold, goal breach, daily report). There is no "Send Nudge" button. The user configures which triggers are active and at what thresholds in Settings.
+**Why:** The original design imagined a manual nudge button, but that defeats the purpose — the user would be choosing to interrupt themselves, which they could just do on their own. The value is in automatic accountability with zero friction.
+
+### ADR-023: NudgeType is determined by the friend's reply — not set at send time
+**Decision:** `nudge.type` is nullable in the DB. It is `NULL` when the nudge row is inserted and is set when the friend replies: `1` → `encouragement`, `2` → `shame`, any other text → `custom`.
+**Why:** The type represents the friend's chosen response, not something the app user selects. The app user has no input on the type of message their friend sends back.
+
+### ADR-024: APNs delivered via direct HTTP/2 from Edge Function
+**Decision:** Push notifications are sent from the `receive-reply` Edge Function by making direct HTTP/2 calls to the APNs API using token-based auth (ES256 JWT generated from the .p8 key). Supabase's push notification dashboard is not used.
+**Why:** Supabase's push dashboard requires extra setup and doesn't integrate with the inbound SMS reply flow. Calling APNs directly from the Edge Function is simpler and keeps all reply-delivery logic in one place.
+
+### ADR-025: `device_tokens` is a separate table (not a column on `profile`)
+**Decision:** Device tokens are stored in a `device_tokens` table with `(user_id, token, platform, updated_at)` and a unique constraint on `(user_id, token)`.
+**Why:** Users may have multiple devices (iPhone + iPad). A single column on `profile` can only hold one token. A separate table with upsert on `(user_id, token)` handles multiple devices cleanly.
+
+### ADR-026: Nudge rate limit is 10 per friend per day in the user's local timezone
+**Decision:** The `send-nudge` Edge Function enforces a maximum of 10 nudges per friend per calendar day, where "day" is calculated using the user's `profile.time_zone` (IANA format).
+**Why:** Prevents spam. 10/day is high enough to not block legitimate multi-trigger scenarios while preventing runaway sending. Local timezone is used so "today" matches the user's experience rather than UTC midnight.
+
+### ADR-027: STOP opt-out sets `status = blocked`; no custom confirmation SMS is sent
+**Decision:** When a friend replies with a STOP keyword, all their friend rows are set to `blocked` and no confirmation SMS is sent from the app.
+**Why:** Twilio handles the regulatory STOP acknowledgment at the carrier level automatically. Sending an additional confirmation SMS from the app could interfere with the carrier-level STOP processing and creates a compliance risk.
+
+### ADR-028: Two-init pattern for ViewModels with `@MainActor` service injection
+**Decision:** ViewModels that inject services use two separate inits: a no-argument production init (`init() { self.service = RealService() }`) and a testing init (`init(service: ServiceProtocol) { self.service = service }`). Do not use a single init with a default parameter value.
+**Why:** With `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, writing `init(service: ServiceProtocol = RealService())` produces "Call to main actor-isolated initializer in a synchronous nonisolated context" — the default expression is evaluated in a nonisolated context. Two separate inits avoids this entirely.

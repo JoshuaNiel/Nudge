@@ -139,7 +139,7 @@ create table public.nudge (
   friend_id    bigint       not null references public.friend(id) on delete cascade,
   prompt       varchar(500) not null,  -- message options sent to the friend
   friend_reply varchar(500),           -- friend's reply text, populated by Twilio webhook
-  type         nudge_type   not null,
+  type         nudge_type,
   status       nudge_status not null default 'sent_to_friend',
   sent_timestamp    timestamptz  not null default now()
 );

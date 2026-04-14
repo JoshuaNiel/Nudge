@@ -38,16 +38,21 @@ Nudge/
     Goals/
     Apps/
     Social/
+      SocialView.swift            # Friends list, AddFriendSheet, NudgeHistoryView, NudgeHistoryRow
+      SocialViewModel.swift       # Loads/deletes friends; two-init pattern for testability
     Settings/
   Models/
-    AppUsage.swift          # (needs update to match DB schema column names)
-    Goal.swift              # (needs update to match DB schema column names)
+    AppUsage.swift          # AppUsage, AppRecord, AppUsageWithName, AppCategory, AppCategoryMember
+    Goal.swift              # Goal, GoalInsert, GoalWithProgress, GoalType, GoalFrequency, GoalTarget
+    Social.swift            # Friend, FriendInsert, Nudge, FriendStatus, NudgeType, NudgeStatus
   Services/
     AuthService.swift       # Supabase auth calls (sign up, sign in, Apple, profile patch)
+    FriendService.swift     # fetch/add/delete/update friend; fetch nudge history
+    NudgeService.swift      # sendNudge(friendId:report:) — calls send-nudge Edge Function
     UsageService            # (Phase 1/2 — DeviceActivity + Supabase sync)
     GoalService             # (Phase 3)
     NotificationService     # (Phase 4)
-    SocialService           # (Phase 5)
+    DeviceTokenService      # (Phase 5F — store APNs device token in device_tokens table)
 ```
 
 Future targets (not yet added):
@@ -81,7 +86,7 @@ Supabase credentials are stored in `Config.xcconfig` (gitignored) and exposed to
 | Auth session + current user | `AppState` | `@EnvironmentObject` from `NudgeApp` |
 | Onboarding completion | `@AppStorage("onboardingComplete")` | Persisted via UserDefaults |
 | Feature-level UI state | Per-feature ViewModels (to be added) | `@StateObject` / `@ObservedObject` |
-| Real-time nudges | Supabase Realtime (Phase 5) | TBD |
+| Real-time nudge status | Supabase Realtime subscription on `nudge` table | Phase 5G — not yet implemented |
 
 ---
 

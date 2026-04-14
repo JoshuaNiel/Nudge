@@ -13,6 +13,7 @@ DerivedData/
 
 # Secrets
 Nudge/Config.xcconfig
+supabase/.temp
 
 # Claude Code — local settings and generated skills
 .claude/settings.local.json
