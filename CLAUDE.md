@@ -21,6 +21,19 @@ Reference docs (read only when relevant):
 - `docs/auth.md` — auth flow and onboarding sequence
 - `docs/entitlements.md` — required entitlements and permission request flow
 
+## Spec-first development
+
+**Never implement a feature without a complete spec.** If asked to implement something and the spec is missing or not fleshed out:
+
+1. Stop — do not guess at requirements or begin coding.
+2. Ask the user the clarifying questions needed to fully define the feature (data model, business rules, edge cases, UI behavior, acceptance criteria).
+3. Write or update the spec in `docs/specs/` until it is complete enough to implement from.
+4. Get confirmation from the user that the spec is correct before writing any code.
+
+A spec is complete when it defines: what data is stored/read, what the user sees and does, all edge cases and error states, and what "done" looks like.
+
+---
+
 ## Test-driven development (TDD)
 
 For every new feature: **write tests first, then implement.**
