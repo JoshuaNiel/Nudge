@@ -33,8 +33,8 @@ Friends do not need the Nudge app or a Supabase account. They are stored by name
 - [x] DB schema deployed (`friend`, `nudge` tables, RLS, column-level grants)
 - [x] `device_tokens` table deployed (migration `001_device_tokens.sql`)
 - [x] `nudge.type` made nullable (migration `002_nudge_type_nullable.sql`)
-- [x] Twilio account set up — trial mode with verified numbers; credentials stored as Supabase Vault secrets (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`)
-- [x] APNs configured — token-based auth (.p8 key); secrets stored in Vault (`APNS_PRIVATE_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_SANDBOX`)
+- [x] Twilio account set up — trial mode with verified numbers; credentials stored as **Edge Function secrets** (not Vault): `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_MESSAGING_SERVICE_SID`. SMS is sent via Messaging Service SID (`MessagingServiceSid`), not a direct phone number (`From`).
+- [x] APNs configured — token-based auth (.p8 key); secrets stored as **Edge Function secrets** (not Vault): `APNS_PRIVATE_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_SANDBOX`
 
 ---
 
@@ -100,7 +100,7 @@ All three Edge Functions are written and deployed.
 - Fires only when `status = pending` (other statuses ignored)
 - Looks up app user's first name from `profile` (non-fatal — falls back to "Someone")
 - Sends consent SMS: "Hey, [Name] wants your help being more accountable with their screen time. Can we send you updates on their progress? Reply yes or no. You can opt out at any time"
-- **Setup:** Supabase Dashboard → Database → Webhooks → Create. Table: `public.friend`. Event: INSERT. Header: `Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>`
+- **Setup:** Supabase Dashboard → Database → Webhooks → Create. Table: `public.friend`. Event: INSERT. Method: **Edge Function** (not HTTP Request) → select `send-consent`. The Edge Function type handles auth automatically — no `Authorization` header needed.
 
 #### `send-nudge`
 - Called by the iOS app automatically when a nudge trigger fires (never user-initiated)
@@ -114,7 +114,9 @@ All three Edge Functions are written and deployed.
 - Returns `{ nudge_id: Int }`
 
 #### `receive-reply`
-- **Twilio inbound webhook** — configure in Twilio Console → Phone Numbers → Messaging → "A message comes in" → POST → this function's URL
+- **Twilio inbound webhook** — configure in Twilio Console → Phone Numbers → Messaging → "A message comes in" → POST → this function's URL (`https://<project-ref>.supabase.co/functions/v1/receive-reply`)
+- **Deployed with `--no-verify-jwt`** — Twilio webhooks don't carry a Supabase JWT. Security is handled by Twilio HMAC-SHA1 signature validation instead.
+- **URL reconstruction for signature validation:** Supabase's proxy delivers requests with `http://` scheme and strips the `/functions/v1` path prefix, so `req.url` does not match the URL Twilio signed. The function reconstructs the correct URL using `x-forwarded-proto` (scheme) + host from `req.url` (correct) + `/functions/v1` prepended to the path. `validateTwilioSignature` accepts an optional explicit URL for this purpose.
 - Validates Twilio HMAC-SHA1 signature on every request (no bypass)
 - Routing:
   1. If sender has any **pending** friend rows → consent reply (applies to all pending rows for that phone)
@@ -295,6 +297,10 @@ create policy "users manage own device tokens"
 | STOP confirmation SMS | None — Twilio handles the regulatory acknowledgment at the carrier level. Do not send a custom confirmation. |
 | APNs delivery method | Direct HTTP/2 calls from Edge Function using token-based auth (.p8 key + ES256 JWT). No Supabase dashboard push required. |
 | Where is Deno LS configured | `.vscode/settings.json` at repo root, `deno.enablePaths: ["supabase/functions"]`. IDE-only — no effect on Supabase deployment. |
+| Twilio secrets location | Edge Function secrets (`supabase secrets set`), not Supabase Vault. Vault is for DB-layer secrets; `Deno.env.get()` reads Edge Function secrets only. |
+| SMS sender identity | Twilio Messaging Service SID (`MessagingServiceSid` param), not a direct phone number (`From`). Enables number pooling and better deliverability. |
+| `receive-reply` JWT verification | Disabled (`--no-verify-jwt`) — Twilio can't send a Supabase JWT. Twilio HMAC-SHA1 signature validation is the auth mechanism instead. |
+| Twilio signature validation URL | Reconstructed from `x-forwarded-proto` + host from `req.url` + `/functions/v1` prefix — not `req.url` directly, which has wrong scheme and stripped prefix behind Supabase's proxy. |
 
 ## Open Questions (Still Unresolved)
 

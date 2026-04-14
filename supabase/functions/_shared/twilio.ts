@@ -2,20 +2,24 @@
 
 /** Send an SMS via Twilio. Throws on non-2xx response. */
 export async function sendSms(to: string, body: string): Promise<void> {
-  const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID")!;
-  const authToken = Deno.env.get("TWILIO_AUTH_TOKEN")!;
-  const from = Deno.env.get("TWILIO_PHONE_NUMBER")!;
+  const accountSid = Deno.env.get('TWILIO_ACCOUNT_SID')!;
+  const authToken = Deno.env.get('TWILIO_AUTH_TOKEN')!;
+  const messagingServiceSid = Deno.env.get('TWILIO_MESSAGING_SERVICE_SID')!;
 
   const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
   const credentials = btoa(`${accountSid}:${authToken}`);
 
   const res = await fetch(url, {
-    method: "POST",
+    method: 'POST',
     headers: {
       Authorization: `Basic ${credentials}`,
-      "Content-Type": "application/x-www-form-urlencoded",
+      'Content-Type': 'application/x-www-form-urlencoded',
     },
-    body: new URLSearchParams({ To: to, From: from, Body: body }).toString(),
+    body: new URLSearchParams({
+      To: to,
+      MessagingServiceSid: messagingServiceSid,
+      Body: body,
+    }).toString(),
   });
 
   if (!res.ok) {
@@ -33,36 +37,41 @@ export async function sendSms(to: string, body: string): Promise<void> {
  */
 export async function validateTwilioSignature(
   req: Request,
-  params: Record<string, string>
+  params: Record<string, string>,
+  url?: string
 ): Promise<boolean> {
-  const signature = req.headers.get("X-Twilio-Signature");
+  const signature = req.headers.get('X-Twilio-Signature');
   if (!signature) return false;
 
-  const authToken = Deno.env.get("TWILIO_AUTH_TOKEN")!;
+  const authToken = Deno.env.get('TWILIO_AUTH_TOKEN')!;
 
-  // Build the string-to-sign: URL + sorted param key/values
+  // Build the string-to-sign: URL + sorted param key/values.
+  // url should be the exact public URL Twilio used when sending the webhook —
+  // req.url is unreliable behind Supabase's proxy (wrong scheme, stripped path prefix).
   const sortedKeys = Object.keys(params).sort();
-  let str = req.url;
+  let str = url ?? req.url;
   for (const key of sortedKeys) {
-    str += key + (params[key] ?? "");
+    str += key + (params[key] ?? '');
   }
 
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
-    "raw",
+    'raw',
     encoder.encode(authToken),
-    { name: "HMAC", hash: "SHA-1" },
+    { name: 'HMAC', hash: 'SHA-1' },
     false,
-    ["sign"]
+    ['sign']
   );
-  const sigBytes = await crypto.subtle.sign("HMAC", key, encoder.encode(str));
+  const sigBytes = await crypto.subtle.sign('HMAC', key, encoder.encode(str));
   const expected = btoa(String.fromCharCode(...new Uint8Array(sigBytes)));
 
   return expected === signature;
 }
 
 /** Parse application/x-www-form-urlencoded body into a plain object. */
-export async function parseFormBody(req: Request): Promise<Record<string, string>> {
+export async function parseFormBody(
+  req: Request
+): Promise<Record<string, string>> {
   const text = await req.text();
   const params: Record<string, string> = {};
   for (const [key, value] of new URLSearchParams(text)) {
@@ -73,11 +82,16 @@ export async function parseFormBody(req: Request): Promise<Record<string, string
 
 /** Keywords Twilio treats as STOP opt-outs (case-insensitive). */
 export const STOP_KEYWORDS = new Set([
-  "stop", "stopall", "unsubscribe", "cancel", "end", "quit",
+  'stop',
+  'stopall',
+  'unsubscribe',
+  'cancel',
+  'end',
+  'quit',
 ]);
 
 /** Keywords Twilio treats as consent acceptance. */
-export const YES_KEYWORDS = new Set(["yes", "y"]);
+export const YES_KEYWORDS = new Set(['yes', 'y']);
 
 /** Keywords Twilio treats as consent rejection. */
-export const NO_KEYWORDS = new Set(["no", "n"]);
+export const NO_KEYWORDS = new Set(['no', 'n']);

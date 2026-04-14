@@ -95,11 +95,11 @@ See `specs/phase-3-goals.md` for full spec.
 - [x] `SocialTests.swift` — 43 tests covering all model coding, enum raw values, ViewModel loading/error/delete behavior
 
 **Supabase Edge Functions:**
-- [x] `supabase/functions/_shared/twilio.ts` — `sendSms`, `validateTwilioSignature` (HMAC-SHA1), `parseFormBody`, STOP/YES/NO keyword sets
+- [x] `supabase/functions/_shared/twilio.ts` — `sendSms` (Messaging Service SID), `validateTwilioSignature` (HMAC-SHA1, accepts explicit URL), `parseFormBody`, STOP/YES/NO keyword sets
 - [x] `supabase/functions/_shared/apns.ts` — `sendApnsPush`, `generateApnsJwt` (ES256 JWT with Web Crypto), direct HTTP/2 to APNs
-- [x] `supabase/functions/send-consent/index.ts` — DB webhook handler, consent SMS with first name lookup
+- [x] `supabase/functions/send-consent/index.ts` — DB webhook (Edge Function type) handler, consent SMS with first name lookup
 - [x] `supabase/functions/send-nudge/index.ts` — auto-trigger handler, timezone-aware rate limit, nullable type insert
-- [x] `supabase/functions/receive-reply/index.ts` — Twilio inbound webhook, consent + nudge reply routing, APNs + SMS delivery
+- [x] `supabase/functions/receive-reply/index.ts` — Twilio inbound webhook (`--no-verify-jwt`), URL reconstruction for signature validation, consent + nudge reply routing, APNs + SMS delivery
 - [x] `supabase/functions/deno.json` — compiler options for Deno LSP
 - [x] `.vscode/settings.json` — Deno language server for `supabase/functions/` (IDE only)
 
@@ -109,7 +109,12 @@ See `specs/phase-3-goals.md` for full spec.
 
 **Deployment:**
 - [x] All three Edge Functions deployed to Supabase
+- [x] `receive-reply` deployed with `--no-verify-jwt`
 - [x] DB migrations run in Supabase SQL editor
+- [x] DB Webhook configured (Edge Function type → `send-consent`) on `public.friend` INSERT
+- [x] Twilio + APNs secrets set as Edge Function secrets (not Vault)
+- [x] Twilio Messaging Service SID configured; `TWILIO_PHONE_NUMBER` removed
+- [x] Consent SMS flow tested end-to-end — friend receives consent request and reply is processed
 
 ### Remaining
 
@@ -129,6 +134,7 @@ See `specs/phase-3-goals.md` for full spec.
 | DeviceActivity sync trigger (background task vs on-foreground) | Phase 1 | Open — in spec |
 | Can DeviceActivityReport extension write to App Group container? | Phase 1 | Open — in spec |
 | Notification schedule for why reminders | Phase 4 | Open — in spec |
+| Unlock prompt feasibility | Phase 4 | `specs/phase-4-notifications.md` |
 | Nudge trigger architecture (which DeviceActivity callbacks) | Phase 5E | Open — in spec |
 | Which friends receive which trigger types | Phase 5E | Open — in spec |
 | Report string format per trigger type | Phase 5E | Open — in spec |
@@ -141,3 +147,7 @@ See `specs/phase-3-goals.md` for full spec.
 - ~~Rate limiting~~ → 10 nudges/friend/day, user's local timezone
 - ~~NudgeType at send time~~ → NULL; set by friend's reply
 - ~~STOP confirmation SMS~~ → None; Twilio handles it
+- ~~Secrets location~~ → Edge Function secrets, not Vault. `Deno.env.get()` cannot read Vault.
+- ~~SMS sender identity~~ → Messaging Service SID, not direct phone number
+- ~~`receive-reply` 401~~ → Deploy with `--no-verify-jwt`; Twilio HMAC-SHA1 is the auth mechanism
+- ~~Twilio signature validation failing~~ → `req.url` has wrong scheme + stripped path prefix behind Supabase proxy; reconstruct URL from `x-forwarded-proto` + host from `req.url` + `/functions/v1` prefix
