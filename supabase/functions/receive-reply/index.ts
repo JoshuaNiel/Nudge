@@ -36,9 +36,20 @@ Deno.serve(async (req) => {
   try {
     const params = await parseFormBody(req);
 
+    // --- Reconstruct the public URL Twilio signed ---
+    // Behind Supabase's proxy, req.url arrives with http:// (not https) and with
+    // the /functions/v1 prefix stripped. The host in req.url is correct though —
+    // the host header is the internal runtime host, not the project host.
+    // Twilio signs the exact public URL it POST-ed to, so we rebuild it by
+    // taking the host from req.url, the scheme from x-forwarded-proto, and
+    // prepending the stripped /functions/v1 prefix back onto the path.
+    const parsed = new URL(req.url);
+    const proto = req.headers.get('x-forwarded-proto') ?? 'https';
+    const webhookUrl = `${proto}://${parsed.host}/functions/v1${parsed.pathname}`;
+
     // --- Validate Twilio signature ---
     // Rejects any request that didn't come from Twilio.
-    const valid = await validateTwilioSignature(req, params);
+    const valid = await validateTwilioSignature(req, params, webhookUrl);
     if (!valid) {
       console.warn('[receive-reply] Invalid Twilio signature — rejected');
       return twilioXml('<Response/>');

@@ -129,6 +129,7 @@ See `specs/phase-3-goals.md` for full spec.
 | DeviceActivity sync trigger (background task vs on-foreground) | Phase 1 | Open — in spec |
 | Can DeviceActivityReport extension write to App Group container? | Phase 1 | Open — in spec |
 | Notification schedule for why reminders | Phase 4 | Open — in spec |
+| Unlock prompt feasibility | Phase 4 | `specs/phase-4-notifications.md` |
 | Nudge trigger architecture (which DeviceActivity callbacks) | Phase 5E | Open — in spec |
 | Which friends receive which trigger types | Phase 5E | Open — in spec |
 | Report string format per trigger type | Phase 5E | Open — in spec |
