@@ -126,6 +126,22 @@ Settled decisions and their rationale. Do not re-litigate these without good rea
 **Decision:** When a friend replies with a STOP keyword, all their friend rows are set to `blocked` and no confirmation SMS is sent from the app.
 **Why:** Twilio handles the regulatory STOP acknowledgment at the carrier level automatically. Sending an additional confirmation SMS from the app could interfere with the carrier-level STOP processing and creates a compliance risk.
 
+### ADR-029: Edge Function secrets, not Supabase Vault, for runtime credentials
+**Decision:** Twilio and APNs credentials are stored as Edge Function secrets (`supabase secrets set`) rather than in Supabase Vault.
+**Why:** `Deno.env.get()` reads Edge Function environment variables — it cannot access Vault, which stores secrets in the database and is only accessible via SQL. Vault is the right choice when a Postgres function or trigger needs a secret at the DB layer. For secrets consumed exclusively by Edge Functions, Edge Function secrets are the correct mechanism. Both are encrypted at rest; the difference is access control layer, not security level.
+
+### ADR-030: SMS sent via Twilio Messaging Service SID, not a direct phone number
+**Decision:** `sendSms` uses `MessagingServiceSid` as the sender parameter instead of `From` with a direct phone number. The secret is `TWILIO_MESSAGING_SERVICE_SID`.
+**Why:** A Messaging Service enables number pooling, sticky sender (same number per recipient), and better carrier deliverability. It also decouples the code from a specific phone number — numbers can be added or swapped in the Twilio console without any code or secret changes.
+
+### ADR-031: `receive-reply` deployed with `--no-verify-jwt`; auth via Twilio HMAC-SHA1
+**Decision:** The `receive-reply` Edge Function is deployed with JWT verification disabled (`supabase functions deploy receive-reply --no-verify-jwt`). Security is provided by validating the Twilio HMAC-SHA1 signature on every inbound request.
+**Why:** Twilio's inbound webhook does not carry a Supabase JWT — it would fail the default JWT check before the function code even runs, returning a 401. Twilio's signature validation (HMAC-SHA1 of the request URL + body params, signed with the auth token) is the standard mechanism for authenticating Twilio webhooks and provides equivalent protection.
+
+### ADR-032: Twilio signature validated against a reconstructed URL, not `req.url`
+**Decision:** `validateTwilioSignature` accepts an optional explicit `url` parameter. `receive-reply` reconstructs the correct public URL using `x-forwarded-proto` (for the scheme) and the host from `req.url` (which is correct), prepending `/functions/v1` to the path that the proxy strips.
+**Why:** Behind Supabase's proxy, `req.url` arrives with `http://` scheme instead of `https://`, and with the `/functions/v1` path prefix stripped. Twilio signs the exact public URL it POST-ed to (`https://<ref>.supabase.co/functions/v1/receive-reply`). Using `req.url` directly causes the HMAC comparison to always fail. The `host` header is also unreliable — it returns `edge-runtime.supabase.com` (the internal runtime host), not the project host.
+
 ### ADR-028: Two-init pattern for ViewModels with `@MainActor` service injection
 **Decision:** ViewModels that inject services use two separate inits: a no-argument production init (`init() { self.service = RealService() }`) and a testing init (`init(service: ServiceProtocol) { self.service = service }`). Do not use a single init with a default parameter value.
 **Why:** With `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, writing `init(service: ServiceProtocol = RealService())` produces "Call to main actor-isolated initializer in a synchronous nonisolated context" — the default expression is evaluated in a nonisolated context. Two separate inits avoids this entirely.
