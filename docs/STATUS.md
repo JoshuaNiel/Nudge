@@ -1,7 +1,7 @@
 # Nudge — Project Status
 
 > **Read this first every session.** Update it at the end of each session.
-> Last updated: 2026-04-13
+> Last updated: 2026-04-14
 
 ---
 
@@ -16,9 +16,9 @@ Backend (Edge Functions) and iOS service/UI layer are complete. Remaining work:
 - Nudge trigger settings UI
 - Real-time nudge status updates in UI
 
-**Phase 1 — DeviceActivity Pipeline** `[! Blocked]`
+**Phase 1 — DeviceActivity Pipeline** `[ ] Ready to start`
 
-Family Controls entitlement applied for — awaiting Apple approval. Required for all DeviceActivity work and nudge trigger system.
+Family Controls entitlement approved. Physical device available. All open questions resolved — see `specs/phase-1-devactivity.md`.
 
 **Testing infrastructure** `[x] Done` — `NudgeTests` target with **43 passing tests** across Social, Goals, and model suites. Run with:
 ```
@@ -33,11 +33,11 @@ xcodebuild test -project Nudge.xcodeproj -scheme Nudge \
 | Phase | Name | Status |
 |---|---|---|
 | 0 | Auth & Onboarding | `[x] Done` |
-| 1 | DeviceActivity Pipeline | `[! Blocked]` — needs Family Controls entitlement approval |
+| 1 | DeviceActivity Pipeline | `[ ] Ready to start` — entitlement approved; all open questions resolved |
 | 2 | Dashboard | `[ ]` — depends on Phase 1 data in Supabase |
 | 3 | Goals | `[ ] Ready` — no DeviceActivity dependency |
 | 4 | Notifications & Interventions | `[ ]` — depends on Phase 1 + 3 |
-| 5 | Social (Friends + SMS) | `[~] In Progress` — backend done; trigger system blocked on Phase 1 |
+| 5 | Social (Friends + SMS) | `[~] In Progress` — backend done; trigger system ready to start (Phase 1 unblocked) |
 
 ---
 
@@ -64,13 +64,16 @@ All core auth and onboarding work is complete.
 
 ---
 
-## Phase 1 — DeviceActivity Pipeline `[! Blocked]`
+## Phase 1 — DeviceActivity Pipeline `[ ] Ready to start`
 
-**Blocker:** Family Controls entitlement applied for but not yet approved. Required for all DeviceActivity and ManagedSettings work. Must test on real device — simulator does not support these APIs.
+Family Controls entitlement approved. Physical device available. All open questions resolved in a planning session (2026-04-14). See `specs/phase-1-devactivity.md` for the full updated spec.
 
-**Action required:** Wait for Apple approval. Approval can take days to weeks.
-
-See `specs/phase-1-devactivity.md` for full spec.
+**Key decisions:**
+- `DeviceActivityMonitor` is the primary extension (triggers + threshold detection)
+- `DeviceActivityReport` is secondary (usage data extraction for dashboard sync)
+- Nudge sending: Strategy 1 (background URLSession from extension) → validate on device; Strategy 2 (App Group + BGProcessingTask) as fallback
+- Sync: on foreground + midnight `intervalDidEnd` + BGProcessingTask
+- Event naming: `app.<bundle_id>`, `category.<id>`, `total`, `session.timeout`
 
 ---
 
@@ -131,17 +134,23 @@ See `specs/phase-3-goals.md` for full spec.
 
 | Decision | Needed By | Status |
 |---|---|---|
-| DeviceActivity sync trigger (background task vs on-foreground) | Phase 1 | Open — in spec |
-| Can DeviceActivityReport extension write to App Group container? | Phase 1 | Open — in spec |
 | Notification schedule for why reminders | Phase 4 | Open — in spec |
 | Unlock prompt feasibility | Phase 4 | `specs/phase-4-notifications.md` |
-| Nudge trigger architecture (which DeviceActivity callbacks) | Phase 5E | Open — in spec |
-| Which friends receive which trigger types | Phase 5E | Open — in spec |
-| Report string format per trigger type | Phase 5E | Open — in spec |
-| Per-friend trigger configuration vs all-friends-all-triggers | Phase 5E | Open — in spec |
 | Account deletion flow | Pre-submission | Open |
 
-**Resolved this session:**
+**Resolved this session (2026-04-14):**
+- ~~DeviceActivity sync trigger~~ → Option C: foreground + `intervalDidEnd` + BGProcessingTask (ADR-037)
+- ~~Can DeviceActivityReport write to App Group?~~ → Yes — `UserDefaults(suiteName:)` works from extensions (ADR-033)
+- ~~Nudge sending from monitor extension~~ → Strategy 1 (background URLSession); fallback Strategy 2 (App Group + BGProcessingTask) (ADR-034)
+- ~~Monitoring re-registration on goal changes~~ → Debounced 1.5s (ADR-035)
+- ~~DeviceActivityEvent naming~~ → `app.<bundle_id>`, `category.<id>`, `total`, `session.timeout` (ADR-036)
+- ~~App Group secrets~~ → Anon key + JWT only; never service role key (ADR-038)
+- ~~Which friends receive nudges~~ → All accepted friends, global trigger toggles (ADR-039)
+- ~~Report string format~~ → `NudgeMessages.swift` + `_shared/messages.ts`; no emojis; app names; top 3 (ADR-040, ADR-041)
+- ~~Per-friend trigger config~~ → Global toggles now; per-friend in backlog (ADR-039)
+- ~~Concurrency (multiple triggers at once)~~ → Send separately; rate limit handles excess
+
+**Previously resolved:**
 - ~~Twilio account setup~~ → Trial mode, verified numbers only
 - ~~APNs token storage~~ → Separate `device_tokens` table (deployed)
 - ~~Rate limiting~~ → 10 nudges/friend/day, user's local timezone

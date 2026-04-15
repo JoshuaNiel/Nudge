@@ -142,6 +142,46 @@ Settled decisions and their rationale. Do not re-litigate these without good rea
 **Decision:** `validateTwilioSignature` accepts an optional explicit `url` parameter. `receive-reply` reconstructs the correct public URL using `x-forwarded-proto` (for the scheme) and the host from `req.url` (which is correct), prepending `/functions/v1` to the path that the proxy strips.
 **Why:** Behind Supabase's proxy, `req.url` arrives with `http://` scheme instead of `https://`, and with the `/functions/v1` path prefix stripped. Twilio signs the exact public URL it POST-ed to (`https://<ref>.supabase.co/functions/v1/receive-reply`). Using `req.url` directly causes the HMAC comparison to always fail. The `host` header is also unreliable — it returns `edge-runtime.supabase.com` (the internal runtime host), not the project host.
 
+---
+
+## DeviceActivity & Monitoring
+
+### ADR-033: `DeviceActivityMonitor` is the primary extension; `DeviceActivityReport` is for display only
+**Decision:** `DeviceActivityMonitor` handles all real-time threshold detection and drives nudge triggers. `DeviceActivityReport` is used only for extracting per-app usage data to write to the App Group container for Supabase sync.
+**Why:** `DeviceActivityReport` is a SwiftUI view rendered on demand — it has no trigger capability. `DeviceActivityMonitor` receives OS callbacks when scheduled thresholds fire and is the only mechanism for real-time detection.
+
+### ADR-034: Nudge sending from monitor extension — Strategy 1 with Strategy 2 fallback
+**Decision:** The `DeviceActivityMonitor` extension attempts to send nudges via a background `URLSession` (Strategy 1). If this proves unreliable in the monitor sandbox, it falls back to writing a `PendingTrigger` to the App Group and scheduling a `BGProcessingTask` for the main app to handle (Strategy 2). Both strategies are implemented; Strategy 1 is validated first on a physical device.
+**Why:** Strategy 1 gives near-instant nudge delivery (seconds). Strategy 2 is guaranteed to work but introduces 1–15 min latency. The monitor extension cannot make synchronous network calls — only background sessions or deferred tasks.
+
+### ADR-035: Debounced monitoring re-registration on goal changes
+**Decision:** `MonitoringRegistrationService.goalDidChange()` cancels any pending re-registration task and restarts a 1.5-second idle timer. Monitoring is only re-registered after the user stops making changes.
+**Why:** `DeviceActivityCenter.startMonitoring` is a system call that should not be hammered on every keystroke. Debouncing prevents redundant calls when a user rapidly edits a threshold.
+
+### ADR-036: `DeviceActivityEvent` naming scheme
+**Decision:** Event token identifiers follow a structured format: `app.<bundle_id>` for app-specific goals, `category.<category_id>` for category goals, `total` for total screen time, and `session.timeout` for the continuous-use session timer.
+**Why:** The event name is passed as context to `eventDidReachThreshold`. A structured, readable format makes it straightforward to determine which trigger fired without a lookup table.
+
+### ADR-037: Usage sync on foreground + midnight + BGProcessingTask (Option C)
+**Decision:** Usage data is synced to Supabase on three triggers: (1) every app foreground, (2) `intervalDidEnd` at midnight, (3) `BGProcessingTask` safety net.
+**Why:** Foreground sync gives intra-day progress tracking for free (each app open refreshes totals). Midnight sync captures final daily totals even if the app is never opened. BGProcessingTask covers edge cases. The upsert pattern makes running all three idempotent.
+
+### ADR-038: App Group secrets — anon key + JWT only; never service role key
+**Decision:** The main app writes three values to App Group UserDefaults: the Supabase URL, the anon key, and the current user's JWT. The service role key is never written to App Group.
+**Why:** The monitor extension calls Edge Functions as the authenticated user (JWT + anon key). The Edge Function uses its own service role for DB operations server-side. The service role key grants unrestricted DB access — it must never leave the server boundary.
+
+### ADR-039: Global trigger toggles for nudge recipients; per-friend config as future enhancement
+**Decision:** All accepted friends receive all active trigger types. The user controls which trigger types are active globally in Settings (session timeout on/off + threshold, goal breach on/off, daily report on/off + time). There is no per-friend configuration in the current implementation.
+**Why:** Covers the common case with minimal UI and DB complexity. Per-friend configuration (e.g. different friends for different trigger types) is a natural enhancement but requires a `friend_trigger` junction table and additional UI — deferred to backlog.
+
+### ADR-040: Message constants split across `NudgeMessages.swift` (iOS) and `_shared/messages.ts` (Edge Functions)
+**Decision:** All iOS report string templates live in `Nudge/Resources/NudgeMessages.swift`. The reply options suffix lives in `supabase/functions/_shared/messages.ts` and is imported by `send-nudge`. These are the only two files that need to change to update SMS copy.
+**Why:** iOS and Edge Functions are different runtimes (Swift vs TypeScript/Deno) — a single shared file is not possible. Two co-located, clearly named constants files achieve the same goal of easy discoverability and editability.
+
+### ADR-041: SMS messages — no emojis, app names in goal breach, top 3 apps in daily report
+**Decision:** All SMS messages use plain text without emojis. Goal breach messages name the specific app (not "your goal"). Daily report messages list the top 3 apps by usage time.
+**Why:** Matches the tone established in the consent SMS (plain, conversational). App names make goal breach messages immediately actionable. Top 3 is enough context without making messages unwieldy.
+
 ### ADR-028: Two-init pattern for ViewModels with `@MainActor` service injection
 **Decision:** ViewModels that inject services use two separate inits: a no-argument production init (`init() { self.service = RealService() }`) and a testing init (`init(service: ServiceProtocol) { self.service = service }`). Do not use a single init with a default parameter value.
 **Why:** With `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, writing `init(service: ServiceProtocol = RealService())` produces "Call to main actor-isolated initializer in a synchronous nonisolated context" — the default expression is evaluated in a nonisolated context. Two separate inits avoids this entirely.

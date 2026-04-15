@@ -108,7 +108,7 @@ All three Edge Functions are written and deployed.
 - Validates friend exists and has `status = accepted` (404 vs 403 — separate errors)
 - Rate limits: max **10 nudges per friend per day**, calculated in the **user's local timezone** (from `profile.time_zone`)
 - Payload: `{ friend_id: Int, report: String }`
-- Builds full SMS: `report + "\n\nReply 1 to send encouragement 💪\nReply 2 to give them a reality check 📵\nOr reply with your own message"`
+- Builds full SMS: `report + REPLY_OPTIONS` (imported from `_shared/messages.ts` — no emojis)
 - Inserts nudge row with `type = null` (nullable column), `status = sent_to_friend`
 - Marks nudge `failed` if SMS throws
 - Returns `{ nudge_id: Int }`
@@ -130,51 +130,108 @@ All three Edge Functions are written and deployed.
 - Encouragement: "You're stronger than the algorithm! I believe in you, now get off your phone and go do something that will make you happy!"
 - Shame: "4 hours a day is 25% of your waking hours. Do you really want to waste another day of your life accomplishing nothing?"
 
-### 5E — Nudge Trigger System `[ ] Not started` ⚠️ SPEC INCOMPLETE
+### 5E — Nudge Trigger System `[ ] Not started`
 
-**This is the system that actually decides when to send nudges automatically. It is the core of the social feature and needs a full spec before implementation.**
+**Blocked on Phase 1** — requires `DeviceActivityMonitor` extension and Family Controls entitlement. Now unblocked (entitlement approved, physical device available).
 
-The app should send nudges to the user's friends (those with `status = accepted`) when any of the following triggers fire. Users can configure which triggers are active in Settings.
+The app automatically sends nudges to all accepted friends when any of the following triggers fire. Users configure which triggers are active and at what thresholds in Settings.
 
 #### Trigger Types
 
 | Trigger | Description | Default |
 |---|---|---|
-| Time-on-phone | User has been on their phone continuously for N minutes | On (60 min) |
-| Daily total | User's total screen time for the day exceeds N hours | Off |
-| Goal breached | User exceeded a specific goal's limit | Off |
-| Daily report | Send a daily usage summary to friends at a set time | Off |
+| Session timeout | User has been on their phone continuously for N minutes | On (60 min) |
+| Goal breached | User exceeded a specific goal's limit (app, category, or total) | Off |
+| Daily report | Morning SMS summary of previous day's usage sent to all friends | Off |
 
-#### Open Questions — Must Resolve Before Building
+#### Architecture
 
-1. **How does the iOS app detect continuous phone usage?** DeviceActivity's `DeviceActivityMonitor` extension fires when thresholds are hit, but this requires Phase 1 (Family Controls entitlement). Until Phase 1 is complete, nudge triggers cannot be implemented.
+Triggers are detected by the `DeviceActivityMonitor` extension (Phase 1). When a threshold fires, the extension sends the nudge via one of two strategies:
 
-2. **Which friends get nudges?** Does every `accepted` friend get every nudge? Or does the user configure which friends receive which types of nudges? (Simpler: all accepted friends get all triggers; more powerful: per-trigger friend selection.)
+**Strategy 1 (preferred) — Background URL Session from monitor extension:**
+The extension initiates a `URLSession` with a background configuration to call the `send-nudge` Edge Function directly. Near-instant delivery (seconds after threshold). Must be validated on physical device — test this first.
 
-3. **What is the `report` string?** Define exactly what text the app generates for each trigger type. Example formats:
-   - Time-on-phone: "[Name] has been on their phone for [N] hours straight. Maybe check in on them?"
-   - Goal breached: "[Name] exceeded their [App/Category] goal today ([actual] vs [limit])."
-   - Daily report: "[Name]'s screen time today: [total]. Goal status: [met/missed]."
+**Strategy 2 (fallback) — App Group + BGProcessingTask:**
+If Strategy 1 is unreliable in the monitor sandbox: extension writes `PendingTrigger` to App Group, schedules a `BGProcessingTask`. Main app wakes in background (typically 1–15 min) and calls the Edge Function. See Phase 1 spec for full data contract.
 
-4. **How does the trigger read screen time without Phase 1?** The trigger system depends on DeviceActivity data. This entire subsystem is effectively blocked until Family Controls approval.
+#### Which Friends Receive Nudges
 
-5. **Concurrency:** If multiple triggers fire simultaneously (e.g., continuous-time + goal breach), is one nudge sent or multiple?
+**All accepted friends receive all active trigger types** (global trigger toggles). This is the simplest model and covers the common case. The user controls which trigger types are on/off globally in Settings; friends have no individual configuration.
 
-#### Architecture Decision Needed
+> **Future enhancement:** Per-friend trigger configuration (e.g. Mom gets daily report, Jake gets goal breach only). This requires a `friend_trigger` junction table and additional Settings UI. Not in current scope — see backlog.
 
-The trigger system needs to run even when the app is in the background or not running. Options:
-- **DeviceActivityMonitor extension** (preferred) — fires callbacks when thresholds are hit. Calls `send-nudge` Edge Function from within the extension. Requires Phase 1.
-- **Background app refresh** — less reliable, iOS throttles it heavily. Not recommended.
+#### Message Constants Architecture
 
-**This phase is blocked until Phase 1 (Family Controls entitlement) is approved.**
+Report strings are assembled on the iOS side and passed as the `report` parameter to `send-nudge`. **All report string templates live in `Nudge/Resources/NudgeMessages.swift`** so they are easy to find and edit without touching Edge Function code.
+
+The reply options suffix lives in **`supabase/functions/_shared/messages.ts`** and is imported by `send-nudge`. These are the only two files that need to change to update message copy.
+
+**`NudgeMessages.swift`:**
+```swift
+enum NudgeMessages {
+    static func sessionTimeout(firstName: String, minutes: Int) -> String {
+        "\(firstName) has been on their phone for \(minutes) minutes straight."
+    }
+
+    static func goalBreach(firstName: String, minutes: Int, appName: String) -> String {
+        "\(firstName) just passed their \(minutes)-minute daily limit on \(appName)."
+    }
+
+    static func dailyReport(
+        firstName: String,
+        totalMinutes: Int,
+        topApps: [(name: String, minutes: Int)]
+    ) -> String {
+        let total = Self.formatDuration(totalMinutes)
+        let apps = topApps.prefix(3)
+            .map { "\($0.name) (\(Self.formatDuration($0.minutes)))" }
+            .joined(separator: ", ")
+        return "\(firstName)'s screen time yesterday: \(total) total. Top apps: \(apps)."
+    }
+
+    private static func formatDuration(_ minutes: Int) -> String {
+        let h = minutes / 60, m = minutes % 60
+        if h > 0 && m > 0 { return "\(h)h \(m)m" }
+        if h > 0 { return "\(h)h" }
+        return "\(m)m"
+    }
+}
+```
+
+**`supabase/functions/_shared/messages.ts`** (update existing `REPLY_OPTIONS` — remove emojis):
+```typescript
+export const REPLY_OPTIONS =
+  '\n\nReply 1 to send encouragement\n' +
+  'Reply 2 to give them a reality check\n' +
+  'Or reply with your own message';
+```
+
+Import in `send-nudge/index.ts` instead of defining inline.
+
+**Full SMS examples:**
+- Session: "Josh has been on their phone for 47 minutes straight.\n\nReply 1 to send encouragement\nReply 2 to give them a reality check\nOr reply with your own message"
+- Goal breach: "Josh just passed their 30-minute daily limit on Instagram.\n\nReply 1..."
+- Daily report: "Josh's screen time yesterday: 3h 12m total. Top apps: Instagram (1h 4m), TikTok (52m), YouTube (31m).\n\nReply 1..."
+
+#### Concurrency
+
+If multiple triggers fire simultaneously (e.g. session timeout + goal breach at the same time), **send a separate nudge for each trigger.** The rate limit (10 nudges/friend/day) prevents runaway sending. No de-duplication or batching needed for MVP.
 
 #### Settings UI for Nudge Triggers
 
-- Toggle: Enable time-on-phone nudges (default on); threshold picker (30 / 60 / 90 / 120 min)
-- Toggle: Enable daily total nudges; threshold picker (hours)
-- Toggle: Enable goal-breach nudges
-- Toggle: Enable daily report; time picker
-- (Future) Per-friend trigger configuration
+- Toggle: Session timeout nudges (default on); threshold picker (15 / 30 / 60 / 90 / 120 min)
+- Toggle: Goal-breach nudges (default off)
+- Toggle: Daily report (default off); time picker for delivery time
+
+#### Implementation Tasks
+
+- [ ] Create `NudgeMessages.swift` with all report string builders
+- [ ] Create `_shared/messages.ts` with `REPLY_OPTIONS` (no emojis); import in `send-nudge`
+- [ ] Implement `DeviceActivityMonitor` extension `eventDidReachThreshold` with Strategy 1 + Strategy 2 fallback
+- [ ] Create `NudgeTriggerService` in main app — reads pending triggers from App Group (Strategy 2 path) and calls `send-nudge`
+- [ ] Add trigger settings to Settings screen (toggles + threshold pickers)
+- [ ] Store trigger settings in App Group so the monitor extension can read them
+- [ ] Wire `MonitoringRegistrationService` to include `session.timeout` event when enabled
 
 ### 5F — APNs iOS Registration `[ ] Not started`
 
@@ -302,15 +359,15 @@ create policy "users manage own device tokens"
 | `receive-reply` JWT verification | Disabled (`--no-verify-jwt`) — Twilio can't send a Supabase JWT. Twilio HMAC-SHA1 signature validation is the auth mechanism instead. |
 | Twilio signature validation URL | Reconstructed from `x-forwarded-proto` + host from `req.url` + `/functions/v1` prefix — not `req.url` directly, which has wrong scheme and stripped prefix behind Supabase's proxy. |
 
-## Open Questions (Still Unresolved)
+## Open Questions (Resolved This Session)
 
-| Question | Needed By |
+| Question | Resolution |
 |---|---|
-| Nudge trigger architecture — which DeviceActivity callbacks to use | Phase 5E |
-| Which friends receive which trigger types | Phase 5E |
-| Report string format per trigger type | Phase 5E |
-| Per-friend trigger configuration vs all-friends | Phase 5E |
-| Concurrency — multiple triggers at once | Phase 5E |
+| Nudge trigger architecture | `eventDidReachThreshold` for goal/session; BGProcessingTask for daily report. Strategy 1 (background URLSession) preferred; Strategy 2 (App Group + BGProcessingTask) as fallback. |
+| Which friends receive nudges | All accepted friends receive all active trigger types (global toggles). Per-friend config is a future enhancement. |
+| Report string format | `NudgeMessages.swift` (iOS) + `_shared/messages.ts` (Edge Functions). No emojis. App names in goal breach. Top 3 apps in daily report. |
+| Per-friend trigger configuration | Global toggles for now. Per-friend config deferred — see backlog. |
+| Concurrency | Send a separate nudge per trigger. Rate limit handles excess. No batching. |
 
 ---
 

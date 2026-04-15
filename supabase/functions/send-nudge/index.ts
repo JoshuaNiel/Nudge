@@ -10,13 +10,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { sendSms } from '../_shared/twilio.ts';
+import { REPLY_OPTIONS } from '../_shared/messages.ts';
 
 const DAILY_NUDGE_LIMIT = 10;
-
-const REPLY_OPTIONS =
-  '\n\nReply 1 to send encouragement 💪\n' +
-  'Reply 2 to give them a reality check 📵\n' +
-  'Or reply with your own message';
 
 Deno.serve(async (req) => {
   try {

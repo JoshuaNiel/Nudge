@@ -1,6 +1,6 @@
 # Progress Log
 
-> **Total Hours to Date:** 26.5
+> **Total Hours to Date:** 27.5
 
 ---
 
@@ -21,5 +21,6 @@
 | 2026-04-13 | 2.0  | Set up Twilio (trial account, verified numbers) and APNs (token-based auth, .p8 key). Stored all credentials as Supabase Vault secrets. Configured Supabase DB webhook for send-consent and Twilio inbound webhook for receive-reply. |
 | 2026-04-13 | 3.5  | Built full Phase 5 Social layer. iOS: Social.swift models (Friend, FriendInsert, Nudge with nullable NudgeType, all enums with CodingKeys), FriendService + NudgeService with protocols, SocialViewModel (two-init pattern), SocialView replacement (friend list, AddFriendSheet with E.164 validation, NudgeHistoryView). Supabase: _shared/twilio.ts (sendSms, Twilio HMAC-SHA1 signature validation), _shared/apns.ts (sendApnsPush, ES256 JWT via Web Crypto), send-consent, send-nudge (timezone-aware rate limit, nullable type), receive-reply (consent + nudge reply routing, APNs + SMS delivery). DB migrations: device_tokens table, nudge.type made nullable. All three Edge Functions deployed. 43 passing tests. |
 | 2026-04-14 | 3.0  | Upgraded Twilio to paid account and set up Messaging Service (number pooling). Debugged and fixed full consent SMS flow end-to-end: moved Twilio + APNs credentials from Supabase Vault to Edge Function secrets, switched SMS sender from direct phone number to Messaging Service SID, fixed DB webhook type (Edge Function, not HTTP Request), fixed receive-reply 401 by deploying with --no-verify-jwt, fixed Twilio HMAC-SHA1 signature validation failure caused by Supabase proxy mangling req.url (wrong scheme + stripped /functions/v1 prefix). Consent SMS flow verified working: friend receives consent request and opt-in reply is processed correctly. |
+| 2026-04-14 | 1.0  | Planning session: received Family Controls entitlement approval and physical device. Resolved all open architectural decisions for Phase 1 (DeviceActivity pipeline) and Phase 5E (nudge trigger system). Key decisions: DeviceActivityMonitor as primary extension, Strategy 1/2 for nudge sending from extension, App Group ID (group.com.joshuaqn.Nudge), event naming scheme, sync-on-foreground + midnight + BGProcessingTask, global trigger toggles, NudgeMessages.swift + _shared/messages.ts constants architecture, no emojis in SMS. Updated phase-1 and phase-5 specs, added ADRs 033–041 to decisions.md. Created _shared/messages.ts, removed emojis from send-nudge REPLY_OPTIONS. |
 
 ---

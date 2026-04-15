@@ -20,11 +20,13 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 
 ## Future Features
 
+- **Per-friend trigger configuration** — Let users configure which trigger types each friend receives independently (e.g. Mom gets daily report only, Jake gets goal breach only). Requires a `friend_trigger` junction table `(friend_id, trigger_type, enabled)` and additional Settings UI per friend. Current implementation uses global trigger toggles (all friends receive all active triggers). Design for this migration by keeping trigger settings in a separate table from the start.
 - **Mac sync** — sync usage data and goals across Mac using the same Supabase backend
 - **WidgetKit** — home/lock screen widget showing today's total usage or goal progress
 - **App blocking** — hard-block apps when a goal limit is hit (requires ManagedSettings entitlement, separate Apple approval)
 - **Location-based settings lock** — lock app settings when the user is at a specified location (e.g. work); implemented via CoreLocation check when settings screen opens
 - **Notification customization** — let users configure why reminder frequency and time of day
+- **Nudge trigger: daily total** — Send nudge when user's total screen time for the day exceeds N hours. Requires a `DeviceActivityEvent` scoped to all apps with a daily threshold. Not in initial trigger set but fits the existing architecture cleanly.
 
 ---
 
