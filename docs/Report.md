@@ -17,7 +17,7 @@ Nudge is built using SwiftUI on the frontend and Supbase on the backend. Text me
 
 ## Demo Video
 
-<video src="../demoVideo.MP4" controls width="100%"></video>
+[Watch Demo](../demoVideo.MP4)
 
 ---
 
