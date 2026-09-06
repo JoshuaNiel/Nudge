@@ -8,10 +8,12 @@ import Foundation
 /// Read by NudgeTriggerService when the main app wakes via BGProcessingTask.
 struct PendingTrigger: Codable {
     let eventName: String   // e.g. "app.com.instagram.Instagram", "total", "session.timeout"
+    let report: String      // pre-built SMS report text (composed by the extension)
     let timestamp: Date
 
     enum CodingKeys: String, CodingKey {
         case eventName = "event_name"
+        case report
         case timestamp
     }
 }

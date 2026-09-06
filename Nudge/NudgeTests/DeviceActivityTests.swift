@@ -14,17 +14,19 @@ struct PendingTriggerTests {
     @Test func roundTrip() throws {
         let trigger = PendingTrigger(
             eventName: "app.com.instagram.Instagram",
+            report: "Josh just hit their 30-minute limit on Instagram.",
             timestamp: Date(timeIntervalSince1970: 1_000_000)
         )
         let data = try encoder.encode(trigger)
         let decoded = try decoder.decode(PendingTrigger.self, from: data)
 
         #expect(decoded.eventName == trigger.eventName)
+        #expect(decoded.report == trigger.report)
         #expect(decoded.timestamp == trigger.timestamp)
     }
 
     @Test func encodesSnakeCaseKeys() throws {
-        let trigger = PendingTrigger(eventName: "total", timestamp: Date())
+        let trigger = PendingTrigger(eventName: "total", report: "r", timestamp: Date())
         let data = try encoder.encode(trigger)
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
 

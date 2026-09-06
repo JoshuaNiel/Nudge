@@ -1,5 +1,7 @@
 import SwiftUI
 import BackgroundTasks
+import os
+import Supabase
 internal import Auth
 
 @main
@@ -26,6 +28,9 @@ struct NudgeApp: App {
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 Task { await onForeground() }
+            } else if newPhase == .background {
+                // Ask the OS to wake us later to drain any queued nudge triggers.
+                scheduleNudgeTriggerProcessing()
             }
         }
         // Auth race recovery: if onForeground bailed because currentUser was nil,
@@ -55,18 +60,54 @@ struct NudgeApp: App {
             goals: goals,
             sessionTimeoutMinutes: appState.sessionTimeoutMinutes
         )
+
+        // Strategy 2: flush any queued nudge triggers now that we're in a reliable
+        // (foregrounded) network context.
+        await NudgeTriggerService().drainPendingTriggers(userId: userId)
     }
 
     // MARK: - Background Tasks
 
+    private static let logger = Logger(subsystem: "com.joshuaqn.Nudge", category: "NudgeApp")
+
     private func registerBackgroundTasks() {
-        // Strategy 2 fallback: reads PendingTriggers from App Group and calls send-nudge.
-        // Currently a stub; NudgeTriggerService implementation is Phase 1 remaining work.
+        // Strategy 2: reads PendingTriggers from the App Group and calls send-nudge
+        // via the reliable main-app network context.
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: BGTaskIdentifiers.nudgeTrigger,
             using: nil
         ) { task in
-            task.setTaskCompleted(success: true)
+            // The handler closure runs off the main actor; hop back on to touch the
+            // MainActor-isolated scheduling helper, auth SDK, and service.
+            let work = Task { @MainActor in
+                // Reschedule immediately so the queue keeps draining over time.
+                self.scheduleNudgeTriggerProcessing()
+
+                // Auth session is available at the SDK level without @StateObject.
+                guard let userId = supabase.auth.currentUser?.id else {
+                    task.setTaskCompleted(success: true)
+                    return
+                }
+
+                let service = NudgeTriggerService()
+                await service.drainPendingTriggers(userId: userId)
+                task.setTaskCompleted(success: true)
+            }
+
+            task.expirationHandler = {
+                work.cancel()
+            }
+        }
+    }
+
+    private func scheduleNudgeTriggerProcessing() {
+        let request = BGProcessingTaskRequest(identifier: BGTaskIdentifiers.nudgeTrigger)
+        request.requiresNetworkConnectivity = true
+        request.requiresExternalPower = false
+        do {
+            try BGTaskScheduler.shared.submit(request)
+        } catch {
+            NudgeApp.logger.error("failed to schedule nudge-trigger BG task: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

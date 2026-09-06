@@ -45,6 +45,20 @@ private struct FriendSummary: Codable {
     let id: Int
 }
 
+/// Strategy 2: the extension can't see the main app's `PendingTrigger` type
+/// (separate bundle), so it keeps an inline copy with matching CodingKeys.
+private struct PendingTrigger: Codable {
+    let eventName: String
+    let report: String
+    let timestamp: Date
+
+    enum CodingKeys: String, CodingKey {
+        case eventName = "event_name"
+        case report
+        case timestamp
+    }
+}
+
 private enum AppGroupSuite {
     static let name          = "group.com.joshuaqn.Nudge"
     static let supabaseUrl   = "nudge.auth.supabaseUrl"
@@ -53,6 +67,7 @@ private enum AppGroupSuite {
     static let userFirstName = "nudge.user.firstName"
     static let goalsActive   = "nudge.goals.active"
     static let friendsAccepted = "nudge.friends.accepted"
+    static let triggersPending = "nudge.triggers.pending"
     static let midnightSyncNeeded = "nudge.sync.midnightNeeded"
 }
 
@@ -76,9 +91,8 @@ class NudgeMonitor: DeviceActivityMonitor {
         let defaults = UserDefaults(suiteName: AppGroupSuite.name)
         let userName = defaults?.string(forKey: AppGroupSuite.userFirstName) ?? "Your friend"
         let goals = loadGoalSummaries(from: defaults)
-        let friends = loadFriendSummaries(from: defaults)
 
-        logger.debug("[NudgeMonitor] loaded \(goals.count) goals, \(friends.count) friends")
+        logger.debug("[NudgeMonitor] loaded \(goals.count) goals")
 
         guard let matchedGoal = goals.first(where: { $0.eventName == eventName }) else {
             logger.error("[NudgeMonitor] no goal matched event '\(eventName, privacy: .public)' — registered goals: \(goals.map(\.eventName).joined(separator: ", "), privacy: .public)")
@@ -93,28 +107,47 @@ class NudgeMonitor: DeviceActivityMonitor {
         // 1. Post local notification immediately (no network needed)
         postLocalNotification(eventName: eventName, body: reportText)
 
-        // 2. Strategy 1: background URLSession to send-nudge for each accepted friend
-        if friends.isEmpty {
-            logger.debug("[NudgeMonitor] no accepted friends — skipping network nudge")
+        // 2. Strategy 2: enqueue a PendingTrigger for the main app to send. The
+        //    extension's own network calls have proven unreliable on-device.
+        enqueuePendingTrigger(eventName: eventName, report: reportText, defaults: defaults)
+
+        // 3. Best-effort: ask the OS to wake the main app sooner to drain the queue.
+        scheduleMainAppProcessing()
+    }
+
+    // MARK: - Strategy 2: enqueue pending trigger
+
+    private func enqueuePendingTrigger(eventName: String, report: String, defaults: UserDefaults?) {
+        guard let defaults else {
+            logger.error("[NudgeMonitor] App Group defaults unavailable — cannot enqueue trigger")
             return
         }
 
-        guard let urlString = defaults?.string(forKey: AppGroupSuite.supabaseUrl),
-              let anonKey = defaults?.string(forKey: AppGroupSuite.anonKey),
-              let jwt = defaults?.string(forKey: AppGroupSuite.jwt) else {
-            logger.error("[NudgeMonitor] missing App Group secrets (supabaseUrl/anonKey/jwt) — cannot send nudge")
-            return
+        var pending: [PendingTrigger] = []
+        if let data = defaults.data(forKey: AppGroupSuite.triggersPending),
+           let existing = try? JSONDecoder().decode([PendingTrigger].self, from: data) {
+            pending = existing
         }
 
-        logger.debug("[NudgeMonitor] sending nudge to \(friends.count) friend(s)")
-        for friend in friends {
-            sendNudge(
-                friendId: friend.id,
-                report: reportText,
-                supabaseUrl: urlString,
-                anonKey: anonKey,
-                jwt: jwt
-            )
+        pending.append(PendingTrigger(eventName: eventName, report: report, timestamp: Date()))
+
+        guard let encoded = try? JSONEncoder().encode(pending) else {
+            logger.error("[NudgeMonitor] failed to encode pending triggers")
+            return
+        }
+        defaults.set(encoded, forKey: AppGroupSuite.triggersPending)
+        logger.debug("[NudgeMonitor] enqueued pending trigger — queue size now \(pending.count)")
+    }
+
+    private func scheduleMainAppProcessing() {
+        let request = BGProcessingTaskRequest(identifier: BGTaskIDs.nudgeTrigger)
+        request.requiresNetworkConnectivity = true
+        request.requiresExternalPower = false
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            logger.debug("[NudgeMonitor] scheduled main-app nudge-trigger processing")
+        } catch {
+            logger.error("[NudgeMonitor] failed to schedule BG task: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -130,49 +163,6 @@ class NudgeMonitor: DeviceActivityMonitor {
         logger.debug("[NudgeMonitor] intervalDidStart — clearing day-scoped state")
         let defaults = UserDefaults(suiteName: AppGroupSuite.name)
         defaults?.removeObject(forKey: AppGroupSuite.midnightSyncNeeded)
-    }
-
-    // MARK: - Strategy 1: background URLSession
-
-    private func sendNudge(
-        friendId: Int,
-        report: String,
-        supabaseUrl: String,
-        anonKey: String,
-        jwt: String
-    ) {
-        let urlString = "\(supabaseUrl)/functions/v1/send-nudge"
-        guard let url = URL(string: urlString), url.scheme != nil else {
-            logger.error("[NudgeMonitor] invalid supabaseUrl — raw value: '\(supabaseUrl, privacy: .public)'")
-            return
-        }
-        logger.debug("[NudgeMonitor] posting to: \(url.absoluteString, privacy: .public)")
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
-        request.setValue(anonKey, forHTTPHeaderField: "apikey")
-
-        let body = ["friend_id": friendId, "report": report] as [String: Any]
-        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else {
-            logger.error("[NudgeMonitor] failed to serialize request body")
-            return
-        }
-
-        // Background URLSession: the OS manages the transfer after the extension's
-        // execution window closes. Only uploadTask/downloadTask are supported —
-        // dataTask is silently dropped when the extension window closes.
-        let config = URLSessionConfiguration.background(
-            withIdentifier: "com.joshuaqn.Nudge.monitor.nudge.\(friendId)"
-        )
-        config.isDiscretionary = false
-        config.sessionSendsLaunchEvents = true
-        let session = URLSession(configuration: config)
-        let task = session.uploadTask(with: request, from: bodyData)
-        task.resume()
-
-        logger.debug("[NudgeMonitor] background upload task enqueued for friend \(friendId)")
     }
 
     // MARK: - Local notification
@@ -206,15 +196,6 @@ class NudgeMonitor: DeviceActivityMonitor {
             return []
         }
         return goals
-    }
-
-    private func loadFriendSummaries(from defaults: UserDefaults?) -> [FriendSummary] {
-        guard let data = defaults?.data(forKey: AppGroupSuite.friendsAccepted),
-              let friends = try? JSONDecoder().decode([FriendSummary].self, from: data) else {
-            logger.error("[NudgeMonitor] failed to load friends from App Group")
-            return []
-        }
-        return friends
     }
 
     // MARK: - Message formatting (duplicated from NudgeMessages.swift — move to shared framework)

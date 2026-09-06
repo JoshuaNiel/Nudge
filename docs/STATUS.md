@@ -116,11 +116,13 @@ Service layer and extension code complete (2026-04-14). Awaiting Xcode target se
 **What works:**
 - Monitoring registers on launch (`active activities: 1` confirmed in logs)
 - `makeConfiguration` confirmed called with real data (22 unique apps confirmed via Console.app)
-- Strategy 1 nudge trigger path — pending on-device validation
+- Threshold fires on-device → `eventDidReachThreshold` runs + local notification path (2026-09-06)
+
+**Strategy 1 validated NON-functional (2026-09-06):** background `URLSession` from the monitor extension never reaches Supabase (no edge-log entry). Replaced by **Strategy 2** per ADR-034: extension enqueues a `PendingTrigger` to the App Group; main app sends via `NudgeTriggerService.drainPendingTriggers` on BG task + foreground. Awaiting on-device re-test (see PR #11).
 
 **Remaining Phase 1 work:**
-- [ ] Validate Strategy 1 (background URLSession from monitor extension reaches Edge Function)
-- [ ] Remove `UsageSyncService` and related dead code
+- [ ] On-device re-test of Strategy 2 (threshold → PendingTrigger enqueued → main app drains → SMS delivered on foreground / BG task)
+- [ ] Remove `UsageSyncService` and related dead code (note: already absent on this branch)
 - [ ] Remove hidden `DeviceActivityReport` view from `NudgeApp.swift`
 
 ### Known limitations / Phase 3 work
