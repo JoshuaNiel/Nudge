@@ -56,6 +56,11 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
   2. **Shared-secret header** — configure the webhook to send a secret header (e.g. `x-webhook-secret`) and reject the request if it doesn't match an Edge Function secret. Simple, blocks direct anon-key calls.
   3. Add lightweight per-user/per-number rate limiting as defense-in-depth against abuse volume.
 
+## Auth
+
+- **No in-app "Forgot Password" flow + no reset deep link.** A user who forgets their email/password has no in-app recovery path (surfaced when a test user signed out and couldn't get back in). Build: a "Forgot password?" action on `AuthView` calling `supabase.auth.resetPasswordForEmail(email, redirectTo:)`, register the `nudge://` URL scheme, configure Site URL + Redirect URLs in Supabase, and handle `.onOpenURL` in `NudgeApp` to complete recovery (set session → prompt for a new password). Pairs with the email-confirmation deep-link item below. Interim recovery: reset a password via the Auth Admin API with the service_role key.
+- **Sign in with Apple is not configured on the Supabase backend.** `AuthView` shows a "Sign in with Apple" button and `AuthService.signInWithApple` is implemented, but the Apple provider isn't enabled/configured in Supabase Auth (Dashboard → Authentication → Providers → Apple: Service ID, Team ID, Key ID, `.p8` key), so it fails at runtime. Either configure the provider or hide the button until it's set up. Note: App Store guidelines require Apple sign-in if other third-party auth is offered (ADR-002).
+
 ## Security (tracked debt)
 
 - **Re-enable `send-nudge` gateway `verify_jwt` once Supabase fixes ES256 support.** `send-nudge` is deployed with `--no-verify-jwt` because the Edge Functions gateway currently can't verify asymmetric (ES256) user tokens — a known Supabase platform bug (supabase/supabase #44530, #42244) where the gateway hard-expects legacy HS256. Auth is enforced in-function via `getUser()` + friend-ownership (secure; matches ADR-031/receive-reply and Supabase's own recommendation). When Supabase ships gateway ES256 verification, redeploy `send-nudge` with `verify_jwt` on to restore defense-in-depth.
