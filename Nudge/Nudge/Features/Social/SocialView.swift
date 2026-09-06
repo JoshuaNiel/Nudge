@@ -277,8 +277,7 @@ private struct AddFriendSheet: View {
     }
 
     private func isValidE164(_ phone: String) -> Bool {
-        let pattern = #"^\+[1-9]\d{7,14}$"#
-        return phone.range(of: pattern, options: .regularExpression) != nil
+        phone.isValidE164
     }
 }
 
