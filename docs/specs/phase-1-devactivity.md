@@ -1,17 +1,16 @@
 # Phase 1 — DeviceActivity Pipeline
 
-**Status:** `[ ] Ready to start`
+**Status:** `[~] In Progress`
 
 ---
 
 ## What We're Building and Why
 
-Nudge's core value is automatic accountability — the app detects when a user is spending too much time on their phone and automatically notifies their friends, without the user having to do anything. To do that, the app needs two things:
+Nudge's core value is automatic accountability — the app detects when a user is spending too much time on their phone and automatically notifies their friends, without the user having to do anything. Phase 1 builds the plumbing for that:
 
-1. **Real-time threshold detection** — know the moment a user has been on their phone for too long straight, or the moment they blow past their specif app/category goal.
-2. **Usage history** — store daily per-app usage data in Supabase so the dashboard can show trends, the daily morning report can pull yesterday's stats, and goal progress can be tracked over time.
+**Real-time threshold detection** — know the moment a user has been on their phone too long, or the moment they blow past a specific app/category goal, and fire a nudge to their friends.
 
-Phase 1 builds the plumbing for both. Without it, Phases 2–5E have no data to work with.
+Phase 2 handles usage display (see `specs/phase-2-dashboard.md`).
 
 ---
 
@@ -22,9 +21,9 @@ Apple treats Screen Time data as extremely sensitive — it reveals everywhere y
 Instead, Apple provides two controlled mechanisms:
 
 - **`DeviceActivityMonitor` extension** — the OS calls your code when specific usage events occur (a schedule starts, a threshold is hit, a schedule ends). Your code reacts to these events but cannot query raw usage data.
-- **`DeviceActivityReport` extension** — a SwiftUI view that Apple renders inside your app in a sandboxed process. It has access to raw usage data, but only to display it. It cannot make network calls or push data anywhere on its own.
+- **`DeviceActivityReport` extension** — a SwiftUI view that Apple renders inside your app in a sandboxed process. It has access to raw usage data, but **only to display it on-device**. It cannot write to App Group containers, make network calls, or push data anywhere — this is enforced by the OS sandbox and cannot be worked around. See ADR-049.
 
-The consequence for Nudge is that **the main app cannot directly read how long the user has been on their phone.** All data flows through these two extensions, which then hand off to the main app via a shared App Group container.
+The consequence for Nudge: **usage data cannot be synced to Supabase.** All cloud functionality is driven by threshold events from `DeviceActivityMonitor`. The `DeviceActivityReport` extension is used exclusively for the Phase 2 dashboard display.
 
 ---
 
@@ -32,31 +31,28 @@ The consequence for Nudge is that **the main app cannot directly read how long t
 
 ### `DeviceActivityMonitor` — Primary: Real-Time Trigger Detection
 
-This is the most important extension for Nudge's core feature. You create it as a new Xcode target. Apple's OS instantiates it and calls methods on it when events you've configured occur:
+This is the most important extension for Nudge's core feature. Apple's OS instantiates it and calls methods on it when events you've configured occur:
 
 - `intervalDidStart` — the monitoring day has begun (midnight)
 - `eventDidReachThreshold(event:activity:)` — a usage threshold you defined has been hit
 - `intervalDidEnd` — the monitoring day has ended (midnight)
 
-You configure thresholds using `DeviceActivityEvent` objects — for example, "30 minutes of total phone use" or "30 minutes on Instagram specifically." When `eventDidReachThreshold` fires, the extension knows which threshold was crossed (via the event name) and can act on it.
+You configure thresholds using `DeviceActivityEvent` objects — for example, "2 hours of total phone use" or "30 minutes on Instagram." When `eventDidReachThreshold` fires, the extension knows which threshold was crossed (via the event name) and can act on it.
 
 **This is how Nudge detects that it's time to send a nudge to a friend.**
 
-**Critical constraint:** The monitor extension **cannot make outbound network calls.** Apple enforces this at the OS level — it's not a guideline, it's a hard sandbox restriction. This means the extension cannot call the Supabase `send-nudge` Edge Function directly. Instead, it either uses a background URL session (which the OS manages outside the extension's execution window) or writes a pending trigger to a shared container for the main app to pick up. See "Nudge Trigger Strategy" below.
-
-**What it CAN do directly:**
-- Post local notifications (confirmed supported from monitor extensions)
-- Write to the App Group shared container
-- Interact with `ManagedSettingsStore` (e.g. block an app immediately when a goal is hit — zero latency, OS-level, no network needed)
+**What it CAN do:**
+- Write to the App Group shared container (UserDefaults and FileManager both work)
+- Initiate background `URLSession` transfers (OS manages after execution window closes)
+- Post local `UNNotificationRequest`
+- Interact with `ManagedSettingsStore` (app blocking — zero latency, no network)
 - Schedule a `BGProcessingTask` for the main app
 
-### `DeviceActivityReport` — Secondary: Usage Data Extraction
+### `DeviceActivityReport` — Display Only (Phase 2)
 
-This extension is a SwiftUI view that Apple renders in a sandboxed process inside your main app. It has access to raw Screen Time data (per-app durations, pickup counts, etc.). When your main app hosts this view, the extension reads that data and can write a structured summary to the App Group container for the main app to pick up and upload to Supabase.
+This extension is a SwiftUI view that Apple renders in a sandboxed process inside your main app. It has access to raw Screen Time data (per-app durations, pickup counts, etc.) and can display it in any custom SwiftUI view. It **cannot** persist, export, or transmit this data — the sandbox blocks all I/O.
 
-**This is how Nudge gets per-app daily usage data into Supabase** for the dashboard, goal progress, and the daily report nudge.
-
-The main app hosts a zero-size `DeviceActivityReport` view that always renders silently in the background. Every time the extension renders, it writes fresh usage data to the App Group. The main app then reads it and upserts to Supabase.
+Phase 2 uses this extension to power the dashboard. See `specs/phase-2-dashboard.md` for its implementation.
 
 ---
 
@@ -68,33 +64,16 @@ User opens Instagram and uses it for 30 minutes
     ↓
 DeviceActivityMonitor.eventDidReachThreshold fires
     ↓
-Extension reads friend list + secrets from App Group
-Extension posts local notification (and sends text if user has given phone number) to alert the user
+Extension reads GoalSummary + friend list + secrets from App Group
+Extension builds message: "Joshua just hit his 30-minute limit on Instagram."
+Extension posts local notification
 Extension attempts Strategy 1: background URLSession → send-nudge Edge Function
     (if Strategy 1 fails on device) → writes PendingTrigger to App Group,
                                        schedules BGProcessingTask
     ↓
 send-nudge Edge Function validates friend consent + rate limit
     ↓
-Twilio sends SMS to friend: "Josh just passed his 30-minute limit on Instagram..."
-```
-
-### Usage History Flow (for dashboard + daily report)
-```
-User uses apps throughout the day
-    ↓
-App foregrounds (or midnight fires, or BGProcessingTask wakes app)
-    ↓
-Main app hosts DeviceActivityReport view (renders silently, even zero-size)
-    ↓
-DeviceActivityReport extension reads Apple's usage data,
-writes [PendingUsageEntry] JSON to App Group container
-    ↓
-Main app reads from App Group
-    ↓
-Upserts into Supabase: app table + usage table (per-app, per-day totals)
-    ↓
-Dashboard, goal progress, and daily report nudge all query this data
+Twilio sends SMS to friend: "Joshua just hit his 30-minute limit on Instagram."
 ```
 
 ---
@@ -107,17 +86,14 @@ Because the monitor extension cannot make synchronous network calls, we have two
 
 The extension initiates a `URLSession` with a background configuration. The OS manages the transfer and it can complete even after the extension's execution window closes. This gives near-instant nudge delivery — seconds after the threshold fires.
 
-This must be validated on a physical device. The `DeviceActivityMonitor` sandbox may restrict background URL sessions. If transfers complete reliably, Strategy 1 is the implementation.
+This must be validated on a physical device. If transfers complete reliably, Strategy 1 is the implementation.
 
 **Strategy 2 (fallback) — App Group + BGProcessingTask**
 
 If Strategy 1 does not work reliably:
 1. Extension writes `PendingTrigger { eventName, timestamp }` to App Group
-2. Extension schedules a `BGProcessingTask`
-3. iOS wakes the main app in the background (typically 1–15 minutes)
-4. Main app reads pending triggers, calls `send-nudge` for each, clears the list
-
-Both strategies are implemented. Strategy 1 is tested first. If it works, Strategy 2 code stays as a fallback but is never hit in practice.
+2. iOS wakes the main app in the background (typically 1–15 minutes)
+3. Main app reads pending triggers, calls `send-nudge` for each, clears the list
 
 **Latency expectations:**
 
@@ -127,37 +103,33 @@ Both strategies are implemented. Strategy 1 is tested first. If it works, Strate
 | Battery/CPU pressure | Seconds | Up to 30 minutes |
 | App force-quit | Seconds (extension still runs) | Until app reopens |
 
-A 5–15 minute delay on an accountability nudge is less than ideal — the more instant, the more effective. Strategy 2 is a fallback if we cannot get that to work.
-
 ---
 
 ## App Group: Why It's Needed
 
-The monitor extension and the report extension both run in separate sandboxed processes from the main app. By default, they cannot communicate with each other or with the main app at all.
+The monitor extension runs in a separate sandboxed process from the main app. By default, it cannot communicate with the main app at all.
 
-**App Groups** solve this. An App Group is a shared container on disk that any target enrolled in the same group can read and write. It's provisioned through Apple's developer portal (Xcode handles this automatically via the capability). Only targets signed with your certificate and enrolled in the group can access it.
+**App Groups** solve this. An App Group is a shared container that any target enrolled in the same group can read and write.
 
 App Group ID: **`group.com.joshuaqn.Nudge`**
 
 This ID must appear in the `.entitlements` file of:
 - Main app target
-- `DeviceActivityMonitor` extension target
-- `DeviceActivityReport` extension target
+- `NudgeActivityMonitor` extension target
+- `NudgeActivityReport` extension target (needed for its entitlement even though it cannot write)
 
 ---
 
 ## App Group Secrets: Why and What
 
-The monitor extension needs to call the Supabase Edge Function. It cannot access `Config.xcconfig` (that's only available at build time in the main app). Instead, the main app writes the necessary credentials to App Group UserDefaults at login, and the extension reads them at runtime.
+The monitor extension needs to call the Supabase Edge Function. It cannot access `Config.xcconfig`. Instead, the main app writes credentials to App Group UserDefaults at login, and the extension reads them at runtime.
 
 **What to store:**
 - `nudge.auth.supabaseUrl` — the project URL
-- `nudge.auth.anonKey` — the Supabase anon key (public by design — already in the app bundle)
+- `nudge.auth.anonKey` — the Supabase anon key
 - `nudge.auth.jwt` — the user's current session JWT
 
-**Why this is safe:** App Groups are locked to your app's certificate and entitlement. No other app on the device can read them. JWTs expire, so even if the device were compromised, the window of exposure is limited.
-
-**Never store the service role key in App Group.** The monitor extension calls Edge Functions as the authenticated user. The Edge Function uses its own service role for DB operations server-side. The service role key grants unrestricted DB access and must never leave the server.
+**Never store the service role key in App Group.** The monitor extension calls Edge Functions as the authenticated user. The service role key grants unrestricted DB access and must never leave the server.
 
 The main app must refresh `nudge.auth.jwt` in App Group whenever the Supabase session token refreshes.
 
@@ -165,17 +137,18 @@ The main app must refresh `nudge.auth.jwt` in App Group whenever the Supabase se
 
 ## Monitoring Re-Registration: Why It's Needed
 
-`DeviceActivityCenter.startMonitoring` registers a schedule and a set of events. If the device restarts, monitoring stops and must be re-registered. If goals change, the event set must be rebuilt and monitoring re-started with the new thresholds.
+`DeviceActivityCenter.startMonitoring` registers a schedule and a set of events. If the device restarts, monitoring stops and must be re-registered. If goals change, the event set must be rebuilt.
 
 **`MonitoringRegistrationService`** owns this. It:
 - Re-registers monitoring on every app foreground if `DeviceActivityCenter.shared.activities` is empty (catches restarts)
-- Uses a **10-second debounce** when goals change — so a user rapidly updating goals doesn't hammer `DeviceActivityCenter` on every frame
+- Uses a **10-second debounce** when goals change — so rapid edits don't hammer `DeviceActivityCenter`
+- Always registers a schedule even with an empty events dict — required so `DeviceActivityReport` (Phase 2) has a monitored period to query against
 
 ---
 
 ## Event Naming Scheme
 
-`DeviceActivityEvent.Name` is a string token. When `eventDidReachThreshold` fires, the event name tells the extension which goal or trigger caused it. We use a structured format:
+`DeviceActivityEvent.Name` is a string token. When `eventDidReachThreshold` fires, the event name tells the extension which goal or trigger caused it:
 
 | Goal / Trigger Type | Event name format | Example |
 |---|---|---|
@@ -184,100 +157,69 @@ The main app must refresh `nudge.auth.jwt` in App Group whenever the Supabase se
 | Total screen time goal | `total` | `total` |
 | Session timeout (continuous use) | `session.timeout` | `session.timeout` |
 
-The session timeout event is special — it's not tied to a goal in the DB. It fires based on the user's "friend notification timeout" setting (e.g. "send a nudge if I've been on my phone for 45 minutes straight").
+The session timeout event fires based on the user's configured timeout setting (e.g. "send a nudge if I've been on my phone for 45 minutes straight"), not a DB goal.
 
 ---
 
-## Usage Sync: When and How Often
+## Nudge Message Format
 
-Usage data is synced to Supabase on three triggers (Option C — all three):
+Messages are built inside the monitor extension from `GoalSummary` data (read from App Group). The limit value and app name are both available at threshold-fire time:
 
-| Trigger | Why |
+| Trigger type | Message |
 |---|---|
-| App foreground | Fresh intra-day data for dashboard + goal progress. Running the same upsert twice is harmless. |
-| `intervalDidEnd` at midnight | Captures final daily totals even if the app was never opened that day. |
-| `BGProcessingTask` (safety net) | Covers edge cases where neither of the above fires reliably. |
+| App goal (60 min, Instagram) | "Joshua just hit his 60-minute limit on Instagram." |
+| Total screen time (2hr) | "Joshua just hit his 2-hour daily screen time limit." |
+| Session timeout (30 min) | "Joshua has been on his phone for 30 minutes straight." |
 
-The upsert pattern (`on conflict (user_id, date, app_id) do update`) makes all three idempotent — running the sync multiple times per day always produces the correct result.
-
-**This gives intra-day progress tracking for free.** Every time the user opens the app, the usage totals are refreshed. "You've used 22 of your 30 minutes on Instagram today" is accurate as of the last app open.
+**Note:** Exact current usage beyond the threshold is not available inside `eventDidReachThreshold`. The threshold value is used as the effective usage figure. "Top apps" breakdown is not included in trigger messages.
 
 ---
 
 ## Prerequisites
 
 - [x] Family Controls entitlement approved by Apple
-- [x] DB schema deployed (`usage` table, `app` table, RLS policies)
+- [x] DB schema deployed (`goal` table, RLS policies)
 - [x] Physical device available (simulator does not support DeviceActivity APIs)
-- [ ] App Group identifier configured on all targets (`group.com.joshuaqn.Nudge`)
+- [x] App Group identifier configured on all three targets
 
 ---
 
 ## Tasks
 
 ### Entitlement & Project Setup
-- [x] Family Controls entitlement approved
-- [ ] Add **Family Controls** capability to main app target (Signing & Capabilities → + Capability → "Family Controls")
-- [ ] Add **App Groups** capability to main app target; set ID: `group.com.joshuaqn.Nudge`
-- [ ] Create **`DeviceActivityMonitor`** extension target
-  - Add Family Controls + App Groups (`group.com.joshuaqn.Nudge`) capabilities
-- [ ] Create **`DeviceActivityReport`** extension target
-  - Add Family Controls + App Groups (`group.com.joshuaqn.Nudge`) capabilities
-- [ ] Confirm all three `.entitlements` files contain `group.com.joshuaqn.Nudge` under `com.apple.security.application-groups`
+- [x] Family Controls capability on main app target
+- [x] App Groups (`group.com.joshuaqn.Nudge`) on main app target
+- [x] `NudgeActivityMonitor` extension target created — Family Controls + App Groups
+- [x] `NudgeActivityReport` extension target created — Family Controls + App Groups
+- [x] Screen Time permission granted on device via `AuthorizationCenter`
 
-### Permission Request
-- [ ] Implement Screen Time permission request using `AuthorizationCenter.shared.requestAuthorization(for: .individual)`
-- [ ] Wire up to `PermissionsView` — show "Screen Time access required" if denied
-- [ ] Gate usage-dependent features on authorization status
-
-### App Group Secrets Setup
-- [ ] On login and on every session token refresh, write to App Group UserDefaults:
-  ```swift
-  let defaults = UserDefaults(suiteName: "group.com.joshuaqn.Nudge")
-  defaults?.set(supabaseUrl, forKey: "nudge.auth.supabaseUrl")
-  defaults?.set(anonKey,     forKey: "nudge.auth.anonKey")
-  defaults?.set(jwt,         forKey: "nudge.auth.jwt")
-  ```
-- [ ] Never write the service role key to App Group
+### App Group Secrets
+- [x] On login and token refresh, write `supabaseUrl`, `anonKey`, `jwt` to App Group
 
 ### `MonitoringRegistrationService`
-- [ ] Create `MonitoringRegistrationService` in the main app target
-- [ ] `registerMonitoring(goals: [GoalSummary], sessionTimeoutMinutes: Int?)` — builds the full `DeviceActivityEvent` set and calls `DeviceActivityCenter.shared.startMonitoring`
-- [ ] `reregisterIfLapsed()` — checks `DeviceActivityCenter.shared.activities`; if empty and permission granted, re-registers. Call on every app foreground.
-- [ ] `goalDidChange()` — debounced 10s; cancels and restarts a Task that calls `registerMonitoring`
-- [ ] Write current `[GoalSummary]` to `nudge.goals.active` in App Group after every registration so the monitor extension can read goal metadata
+- [x] `registerMonitoring(goals:sessionTimeoutMinutes:)` — builds events, calls `startMonitoring`
+- [x] `reregisterIfLapsed()` — re-registers if `activities` is empty; call on every foreground
+- [x] `goalDidChange()` — 10s debounced re-registration
+- [x] Writes `[GoalSummary]` to `nudge.goals.active` in App Group after every registration
 
-### `DeviceActivityMonitor` Extension
-- [ ] Subclass `DeviceActivityMonitorExtension`
-- [ ] `eventDidReachThreshold`:
-  1. Parse the event name to identify which goal/trigger fired
-  2. Read friend list, secrets, and goal summary from App Group
-  3. Post a local `UNNotificationRequest` immediately (instant — no network needed)
-  4. Attempt **Strategy 1**: initiate background `URLSession` POST to `send-nudge` Edge Function with `{ friend_id, report }` for each accepted friend
-  5. If Strategy 1 is not viable: write `PendingTrigger` to `nudge.triggers.pending` in App Group; schedule `BGProcessingTask`
-- [ ] `intervalDidEnd`: write "capture needed" flag to App Group; schedule `BGProcessingTask` for midnight sync
-- [ ] `intervalDidStart`: clear any day-scoped state in App Group
+### `NudgeActivityMonitor` Extension
+- [x] `eventDidReachThreshold`:
+  1. Parses event name → matches `GoalSummary` from App Group
+  2. Builds message from goal's `targetLabel` and `limitSeconds`
+  3. Posts local `UNNotificationRequest` immediately
+  4. Strategy 1: background `URLSession` POST to `send-nudge` for each accepted friend
+  5. Strategy 2 fallback: writes `PendingTrigger` to App Group
+- [x] `intervalDidEnd`: writes `midnightSyncNeeded` flag to App Group
+- [x] `intervalDidStart`: clears day-scoped state
 
-### `DeviceActivityReport` Extension
-- [ ] Implement `DeviceActivityReportScene` with a custom `ActivityReportContext`
-- [ ] Read per-app usage: `bundleIdentifier`, total `duration` (seconds), pickup count
-- [ ] Write `[PendingUsageEntry]` JSON to `nudge.usage.pending` in App Group
-
-### Main App — Host Report View
-- [ ] Add a zero-size `DeviceActivityReport` view to the root view hierarchy so it renders silently on every app launch and triggers the extension to write fresh data
-
-### Main App — `UsageSyncService`
-- [ ] On app foreground, read `nudge.usage.pending` from App Group; upsert to Supabase; clear the key
-- [ ] On `BGProcessingTask` wake, perform the same sync
-- [ ] Upsert `app` table: `(bundle_id, name)`
-- [ ] Upsert `usage` table: `(user_id, date, app_id, seconds, pickups)` — conflict on `(user_id, date, app_id)`
-- [ ] Derive `usage.date` from user's IANA timezone (`profile.time_zone`), not UTC
-- [ ] On sync failure, leave `nudge.usage.pending` intact — retry on next foreground
-
-### Main App — `NudgeTriggerService` (Strategy 2 path)
+### Main App — NudgeTriggerService (Strategy 2 path)
 - [ ] On `BGProcessingTask` wake, read `nudge.triggers.pending` from App Group
 - [ ] For each pending trigger, call `send-nudge` Edge Function
 - [ ] Clear processed triggers from App Group
+
+### Validation (on-device)
+- [ ] Strategy 1 confirmed: background URLSession POST from monitor extension reaches Supabase Edge Function logs
+- [ ] If Strategy 1 fails: Strategy 2 path validated end-to-end
 
 ---
 
@@ -290,18 +232,12 @@ The upsert pattern (`on conflict (user_id, date, app_id) do update`) makes all t
 | `nudge.auth.supabaseUrl` | `String` | Main app (login / token refresh) | Monitor extension |
 | `nudge.auth.anonKey` | `String` | Main app (login) | Monitor extension |
 | `nudge.auth.jwt` | `String` | Main app (login / token refresh) | Monitor extension |
-| `nudge.usage.pending` | JSON `[PendingUsageEntry]` | DeviceActivityReport extension | Main app `UsageSyncService` |
 | `nudge.triggers.pending` | JSON `[PendingTrigger]` | Monitor extension (Strategy 2) | Main app `NudgeTriggerService` |
 | `nudge.goals.active` | JSON `[GoalSummary]` | Main app (after registration) | Monitor extension |
+| `nudge.friends.accepted` | JSON `[FriendSummary]` | Main app (on login / friend changes) | Monitor extension |
+| `nudge.sync.midnightNeeded` | `Bool` | Monitor extension (`intervalDidEnd`) | Main app (on foreground) |
 
 ```swift
-struct PendingUsageEntry: Codable {
-    let bundleId: String    // e.g. "com.instagram.Instagram"
-    let name: String        // display name
-    let seconds: Int        // total foreground seconds for the day
-    let pickups: Int        // device pickup count
-}
-
 struct PendingTrigger: Codable {
     let eventName: String   // e.g. "app.com.instagram.Instagram"
     let timestamp: Date
@@ -312,37 +248,11 @@ struct GoalSummary: Codable {
     let eventName: String           // matches DeviceActivityEvent.Name raw value
     let limitSeconds: Int
     let targetLabel: String         // e.g. "Instagram", "Social Media", "All Apps"
-    let appBundleId: String?        // nil for category / total goals
+    let appBundleId: String?        // nil for category / total / session.timeout goals
 }
-```
 
-### Supabase — `app` table upsert
-```swift
-struct AppRecord: Codable {
-    let bundleId: String
-    let name: String
-}
-// upsert on bundle_id (PK); update name if changed
-```
-
-### Supabase — `usage` table upsert
-```swift
-struct UsageRecord: Codable {
-    let userId: UUID
-    let date: String        // "YYYY-MM-DD" in user's local timezone (from profile.time_zone)
-    let appId: String       // FK → app.bundle_id
-    let seconds: Int
-    let pickups: Int
-}
-// upsert on unique constraint (user_id, date, app_id)
-```
-
-### `MonitoringRegistrationService` interface
-```swift
-class MonitoringRegistrationService {
-    func registerMonitoring(goals: [GoalSummary], sessionTimeoutMinutes: Int?) throws
-    func reregisterIfLapsed() async
-    func goalDidChange()
+struct FriendSummary: Codable {
+    let id: Int
 }
 ```
 
@@ -350,33 +260,27 @@ class MonitoringRegistrationService {
 
 ## Testing Strategy
 
-### Unit Tests (write first — can run in simulator)
-- `NudgeMessages.swift` — all three message format methods with known inputs
-- `PendingUsageEntry` / `PendingTrigger` / `GoalSummary` — Codable encode/decode round-trips
-- `UsageRecord` date derivation — given IANA timezone and a known UTC moment, assert correct local date string
+### Unit Tests
+- `NudgeMessages.swift` — all message format methods with known inputs
+- `PendingTrigger` / `GoalSummary` — Codable encode/decode round-trips
 - `MonitoringRegistrationService` debounce — rapid `goalDidChange()` calls produce only one registration
 - Event name parsing — `"app.com.instagram.Instagram"` → correct goal type and bundle ID extracted
 
-### Device Testing (manual — cannot run in simulator)
-The following must be verified manually on a physical device with the Family Controls entitlement:
-
-1. **Permission request** — `AuthorizationCenter.shared.requestAuthorization` shows the system prompt; granting/denying is handled correctly
-2. **Monitoring registration** — `DeviceActivityCenter.shared.startMonitoring` succeeds without throwing; events appear in `DeviceActivityCenter.shared.activities`
-3. **Threshold detection** — set a short threshold (e.g. 1 minute on any app), use an app for that duration, confirm `eventDidReachThreshold` fires in the monitor extension
-4. **Strategy 1 validation** — confirm a background URLSession POST from the monitor extension reaches the Supabase Edge Function. Check Supabase logs for the request. If it arrives: Strategy 1 works. If not: fall back to Strategy 2.
-5. **Usage data extraction** — after using apps, open Nudge and confirm `nudge.usage.pending` is populated in App Group and rows appear in Supabase `usage` table
-6. **Midnight sync** — set device clock to 11:59pm, let it tick to midnight, confirm `intervalDidEnd` fires and data syncs
-7. **Restart recovery** — register monitoring, restart device, open app, confirm monitoring is re-registered automatically
+### Device Testing (manual)
+1. **Permission request** — `AuthorizationCenter.shared.requestAuthorization` shows system prompt; granted/denied handled correctly
+2. **Monitoring registration** — `startMonitoring` succeeds; events appear in `DeviceActivityCenter.shared.activities`
+3. **Threshold detection** — set a short threshold (e.g. 1 min), use an app, confirm `eventDidReachThreshold` fires
+4. **Strategy 1 validation** — confirm background URLSession POST reaches Supabase Edge Function logs
+5. **Nudge message content** — confirm message contains correct app name and limit minutes
+6. **Restart recovery** — register monitoring, restart device, open app, confirm re-registration
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] After granting Screen Time permission and using apps, usage rows appear in Supabase with correct local `date`, `seconds`, and `pickups`
-- [ ] Running the sync twice on the same day does not create duplicate rows
-- [ ] `app` table contains a row for every app that appeared in usage
-- [ ] Denying Screen Time permission shows a graceful degraded state — no crash, "permission required" prompt shown
 - [ ] When a `DeviceActivityEvent` threshold fires, `eventDidReachThreshold` is called in the monitor extension
-- [ ] Monitor extension successfully sends a nudge (Strategy 1) OR writes to App Group for pickup (Strategy 2) — confirmed via Supabase Edge Function logs
+- [ ] Monitor extension sends a nudge (Strategy 1) OR writes to App Group for pickup (Strategy 2) — confirmed via Supabase Edge Function logs
+- [ ] Nudge SMS message contains the correct app/goal name and limit duration
+- [ ] Denying Screen Time permission shows a graceful degraded state — no crash
 - [ ] Monitoring resumes automatically after device restart
 - [ ] Goal changes trigger re-registration within 15 seconds of the user finishing edits
