@@ -1,5 +1,6 @@
 import SwiftUI
 import UserNotifications
+import FamilyControls
 
 struct PermissionsView: View {
     var onCompleted: () -> Void
@@ -36,10 +37,16 @@ struct PermissionsView: View {
     }
 
     private func requestScreenTime() {
-        // Family Controls authorization is requested via AuthorizationCenter.
-        // This requires the Family Controls entitlement — implementation in Phase 1 (DeviceActivity setup).
-        // For now, advance to the next step.
-        step = .notifications
+        Task {
+            do {
+                try await AuthorizationCenter.shared.requestAuthorization(for: .individual)
+                await MainActor.run { step = .notifications }
+            } catch {
+                // Authorization denied or failed — advance anyway so the user isn't blocked.
+                // Monitoring-dependent features will show a graceful degraded state.
+                await MainActor.run { step = .notifications }
+            }
+        }
     }
 
     private func requestNotifications() {

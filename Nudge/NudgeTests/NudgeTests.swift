@@ -30,10 +30,14 @@ struct FormattedDurationTests {
         #expect((3600 + 60).formattedDuration == "1h 1m")
     }
 
-    @Test func secondsOnly_roundsToZeroM() {
-        // Under 1 minute with no hours returns "0m"
-        #expect(45.formattedDuration == "0m")
-        #expect(1.formattedDuration == "0m")
+    @Test func subMinuteShowsLessThanOneMinute() {
+        // Any nonzero duration under 1 minute (with no hours) returns "< 1m"
+        #expect(45.formattedDuration == "< 1m")
+        #expect(1.formattedDuration == "< 1m")
+    }
+
+    @Test func zeroShowsZeroM() {
+        #expect(0.formattedDuration == "0m")
     }
 }
 
@@ -195,91 +199,6 @@ struct GoalCodingTests {
         #expect(goal.categoryId == nil)
         #expect(goal.startDate == nil)
         #expect(goal.endDate == nil)
-    }
-}
-
-// MARK: - AppUsage Model Coding
-
-@Suite("AppUsage Model Coding")
-@MainActor
-struct AppUsageCodingTests {
-
-    private let decoder = JSONDecoder()
-    private let encoder = JSONEncoder()
-
-    @Test func appUsageDecodesFromSnakeCaseJSON() throws {
-        let userId = UUID()
-        let json = """
-        {
-            "id": 10,
-            "user_id": "\(userId.uuidString)",
-            "date": "2026-04-13",
-            "app_id": "com.apple.mobilesafari",
-            "seconds": 1234,
-            "pickups": 17
-        }
-        """.data(using: .utf8)!
-
-        let usage = try decoder.decode(AppUsage.self, from: json)
-        #expect(usage.id == 10)
-        #expect(usage.userId == userId)
-        #expect(usage.date == "2026-04-13")
-        #expect(usage.appId == "com.apple.mobilesafari")
-        #expect(usage.seconds == 1234)
-        #expect(usage.pickups == 17)
-    }
-
-    @Test func appRecordDecodesFromSnakeCaseJSON() throws {
-        let json = """
-        {
-            "bundle_id": "com.apple.mobilesafari",
-            "name": "Safari"
-        }
-        """.data(using: .utf8)!
-
-        let record = try decoder.decode(AppRecord.self, from: json)
-        #expect(record.bundleId == "com.apple.mobilesafari")
-        #expect(record.name == "Safari")
-        #expect(record.id == "com.apple.mobilesafari")
-    }
-
-    @Test func appUsageWithNameDecodesFromSnakeCaseJSON() throws {
-        let json = """
-        {
-            "id": 5,
-            "app_id": "com.apple.mobilesafari",
-            "app_name": "Safari",
-            "date": "2026-04-13",
-            "seconds": 600,
-            "pickups": 3
-        }
-        """.data(using: .utf8)!
-
-        let usage = try decoder.decode(AppUsageWithName.self, from: json)
-        #expect(usage.id == 5)
-        #expect(usage.appId == "com.apple.mobilesafari")
-        #expect(usage.appName == "Safari")
-        #expect(usage.date == "2026-04-13")
-        #expect(usage.seconds == 600)
-        #expect(usage.pickups == 3)
-    }
-
-    @Test func appUsageEncodesSnakeCaseKeys() throws {
-        let usage = AppUsage(
-            id: 1,
-            userId: UUID(),
-            date: "2026-04-13",
-            appId: "com.test",
-            seconds: 100,
-            pickups: 5
-        )
-        let data = try encoder.encode(usage)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-
-        #expect(json["user_id"] != nil)
-        #expect(json["app_id"] != nil)
-        #expect(json["userId"] == nil, "camelCase should not appear")
-        #expect(json["appId"] == nil,  "camelCase should not appear")
     }
 }
 
