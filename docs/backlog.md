@@ -48,6 +48,18 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 
 - **App display names in usage data** — The `DeviceActivityReport` extension currently derives app names as the last component of the bundle ID (e.g. "Instagram" from "com.instagram.Instagram"). Consider building a lookup table of known app names or querying the App Store API for better names in Phase 2.
 
+## Security
+
+- **`send-consent` trusts its webhook payload — SMS-abuse vector.** `send-consent` sends the consent SMS based purely on the POST body (`type === "INSERT"`, `status === "pending"`), and does not verify the request actually came from the Supabase DB webhook. Its gateway `verify_jwt` accepts any valid project token, including the **public anon key** (shipped in the app). So a caller with the anon key could POST a crafted payload and make the function text arbitrary phone numbers — SMS spam, Twilio cost, and A2P-compliance risk. (Not a DB breach: the function only reads a friend row + profile name and sends an SMS; the service_role key stays server-side.) **Note:** `send-nudge` is *not* affected — it validates the user via `getUser()` and checks friend ownership, so it's safe even with `--no-verify-jwt`.
+  **Fix (pick one, in order of preference):**
+  1. **Re-validate against the DB before sending** — with the service client, re-fetch the friend row by `record.id` and confirm it exists and is `status = 'pending'`; send only then. Defeats spoofed/invented recipients using data already trusted.
+  2. **Shared-secret header** — configure the webhook to send a secret header (e.g. `x-webhook-secret`) and reject the request if it doesn't match an Edge Function secret. Simple, blocks direct anon-key calls.
+  3. Add lightweight per-user/per-number rate limiting as defense-in-depth against abuse volume.
+
+## Security (tracked debt)
+
+- **Re-enable `send-nudge` gateway `verify_jwt` once Supabase fixes ES256 support.** `send-nudge` is deployed with `--no-verify-jwt` because the Edge Functions gateway currently can't verify asymmetric (ES256) user tokens — a known Supabase platform bug (supabase/supabase #44530, #42244) where the gateway hard-expects legacy HS256. Auth is enforced in-function via `getUser()` + friend-ownership (secure; matches ADR-031/receive-reply and Supabase's own recommendation). When Supabase ships gateway ES256 verification, redeploy `send-nudge` with `verify_jwt` on to restore defense-in-depth.
+
 ## Known Bugs / Tech Debt
 
 - **Email confirmation deep link not wired up** — Supabase sends a `localhost` confirmation URL. Fix: register `nudge://` URL scheme, set Site URL + Redirect URLs in Supabase dashboard, handle `.onOpenURL` in `NudgeApp.swift` calling `supabase.auth.session(from: url)`. Email confirmation is currently disabled in Supabase for development.
