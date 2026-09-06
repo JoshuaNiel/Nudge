@@ -36,6 +36,18 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 
 ---
 
+## Phase 1 — DeviceActivity
+
+- **App-specific goal monitoring (Phase 3 dependency)** — `MonitoringRegistrationService` skips `app.*` and `category.*` goals because `DeviceActivityEvent` requires `ApplicationToken`, which can only be obtained from `FamilyActivityPicker`. Phase 3 (Goals UI) must store the `FamilyActivitySelection` to App Group after the user picks apps, and extend `GoalSummary` with `applicationTokensData: Data?` so the registration service can use them.
+
+- **Category goal monitoring (Phase 3 dependency)** — Our categories are user-defined groups of apps, not Apple's built-in ActivityCategoryTokens. The `DeviceActivityEvent` needs `applications: Set<ApplicationToken>` with all member apps' tokens. `GoalSummary` needs a `categoryBundleIds: [String]` field populated from `app_category_member` so the monitor service can create events covering all member apps.
+
+- **True continuous-session detection** — The current `session.timeout` event fires when accumulated daily total usage hits the threshold, not when continuous unbroken usage hits the threshold. True "45 minutes straight" detection requires tracking screen-lock/unlock events or using multiple short schedules. Explore using `DeviceActivitySchedule.warningTime` or multiple overlapping schedules in a future iteration.
+
+- **Extension shared types** — `GoalSummary`, `FriendSummary`, message formatting logic, and App Group key constants are duplicated between the main app and `NudgeMonitor/MonitorExtension.swift`. Should be moved to a shared Swift framework target when the extension targets are created.
+
+- **App display names in usage data** — The `DeviceActivityReport` extension currently derives app names as the last component of the bundle ID (e.g. "Instagram" from "com.instagram.Instagram"). Consider building a lookup table of known app names or querying the App Store API for better names in Phase 2.
+
 ## Known Bugs / Tech Debt
 
 - **Email confirmation deep link not wired up** — Supabase sends a `localhost` confirmation URL. Fix: register `nudge://` URL scheme, set Site URL + Redirect URLs in Supabase dashboard, handle `.onOpenURL` in `NudgeApp.swift` calling `supabase.auth.session(from: url)`. Email confirmation is currently disabled in Supabase for development.

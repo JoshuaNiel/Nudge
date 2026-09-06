@@ -16,9 +16,9 @@ Backend (Edge Functions) and iOS service/UI layer are complete. Remaining work:
 - Nudge trigger settings UI
 - Real-time nudge status updates in UI
 
-**Phase 1 — DeviceActivity Pipeline** `[ ] Ready to start`
+**Phase 1 — DeviceActivity Pipeline** `[~] In Progress`
 
-Family Controls entitlement approved. Physical device available. All open questions resolved — see `specs/phase-1-devactivity.md`.
+Core service layer and extension stubs complete. Remaining: Xcode target setup (manual GUI work) and on-device validation.
 
 **Testing infrastructure** `[x] Done` — `NudgeTests` target with **43 passing tests** across Social, Goals, and model suites. Run with:
 ```
@@ -64,16 +64,70 @@ All core auth and onboarding work is complete.
 
 ---
 
-## Phase 1 — DeviceActivity Pipeline `[ ] Ready to start`
+## Phase 1 — DeviceActivity Pipeline `[~] In Progress`
 
-Family Controls entitlement approved. Physical device available. All open questions resolved in a planning session (2026-04-14). See `specs/phase-1-devactivity.md` for the full updated spec.
+Service layer and extension code complete (2026-04-14). Awaiting Xcode target setup on physical device.
 
-**Key decisions:**
-- `DeviceActivityMonitor` is the primary extension (triggers + threshold detection)
-- `DeviceActivityReport` is secondary (usage data extraction for dashboard sync)
-- Nudge sending: Strategy 1 (background URLSession from extension) → validate on device; Strategy 2 (App Group + BGProcessingTask) as fallback
-- Sync: on foreground + midnight `intervalDidEnd` + BGProcessingTask
-- Event naming: `app.<bundle_id>`, `category.<id>`, `total`, `session.timeout`
+### Completed (2026-04-14 → 2026-04-15)
+
+**Shared infrastructure:**
+- [x] `Core/AppGroupKeys.swift` — all App Group key constants + BGTask identifiers
+- [x] `Models/DeviceActivity.swift` — `PendingUsageEntry`, `PendingTrigger`, `GoalSummary`, `UsageRecord`, `FriendSummary`
+- [x] `Resources/NudgeMessages.swift` — all SMS message templates (goal breach, session timeout, daily report)
+- [x] DB migration `003_profile_session_timeout.sql` — `session_timeout_minutes` column on `profile` (run in Supabase)
+
+**Main app services:**
+- [x] `Services/GoalService.swift` — `fetchGoalSummaries(userId:)` joins `app` and `app_category` tables for display names
+- [x] `Services/MonitoringRegistrationService.swift` — `registerMonitoring`, `reregisterIfLapsed`, `goalDidChange` (10s debounce); always registers schedule even with empty events (required for DeviceActivityReport to have data)
+- [x] `Services/UsageSyncService.swift` — reads App Group, upserts `app` + `usage` tables (idempotent)
+
+**App wiring:**
+- [x] `Core/AppState.swift` — writes App Group secrets + first name + friends on sign-in/token refresh; clears on sign-out; publishes `timeZone` and `sessionTimeoutMinutes` from profile
+- [x] `NudgeApp.swift` — BGTask registration; foreground → reregisterIfLapsed + 3s delay + UsageSyncService; hosts 1×1 invisible DeviceActivityReport view with today's `DeviceActivityFilter`; `DeviceActivityReport.Context.nudgeSummary`
+- [x] `Features/Auth/PermissionsView.swift` — `AuthorizationCenter.shared.requestAuthorization(for: .individual)` wired up
+- [x] `Info.plist` — `BGTaskSchedulerPermittedIdentifiers` added
+
+**Xcode targets (set up on physical device):**
+- [x] Main app: Family Controls + App Groups (`group.com.joshuaqn.Nudge`) capabilities added
+- [x] `NudgeActivityMonitor` extension target created — Family Controls + App Groups; `MonitorExtension.swift` added; `NSExtensionPrincipalClass = $(PRODUCT_MODULE_NAME).NudgeMonitor`
+- [x] `NudgeActivityReport` extension target created — Family Controls + App Groups; `NudgeActivityReport.swift`, `TotalActivityReport.swift`, `TotalActivityView.swift` contain Nudge implementation; embedded in main app's **Extensions** directory (not PlugIns)
+- [x] Screen Time permission granted on device via `AuthorizationCenter`
+
+**Extension implementation (NudgeActivityReport target):**
+- [x] `NudgeActivityReport.swift` — `@main` entry point using `NudgeUsageReport` scene
+- [x] `TotalActivityReport.swift` — `NudgeUsageReport: DeviceActivityReportScene`; `makeConfiguration` iterates `DeviceActivityResults<DeviceActivityData>` with nested `for await` loops; reads `app.application.bundleIdentifier`; writes `[PendingUsageEntry]` JSON to App Group
+- [x] `TotalActivityView.swift` — `NudgeUsageCaptureView` (zero-size, receives entries from makeConfiguration)
+
+**Tests:**
+- [x] 24 new tests in `DeviceActivityTests.swift` — all 67 tests passing (no regressions)
+
+### Architecture change — DeviceActivityReport is display-only
+
+**Root cause confirmed (2026-04-15):**
+`DeviceActivityReport` extensions run in a hardened Apple sandbox that blocks all App Group writes and network calls. The permission denial ("You don't have permission to save the file") is OS-enforced and cannot be worked around via entitlements or provisioning. See ADR-049.
+
+**Consequence:** Per-app usage data cannot be synced to Supabase. The architecture has been updated:
+- `DeviceActivityReport` → display only (Phase 2 dashboard, local on-device)
+- `DeviceActivityMonitor` → all cloud/nudge functionality (already working)
+- `usage` table in Supabase → unused, retained in schema for future consideration
+- `UsageSyncService` → to be removed
+- Hidden `DeviceActivityReport` in `NudgeApp.swift` → to be removed (served no purpose once write is dropped)
+
+**What works:**
+- Monitoring registers on launch (`active activities: 1` confirmed in logs)
+- `makeConfiguration` confirmed called with real data (22 unique apps confirmed via Console.app)
+- Strategy 1 nudge trigger path — pending on-device validation
+
+**Remaining Phase 1 work:**
+- [ ] Validate Strategy 1 (background URLSession from monitor extension reaches Edge Function)
+- [ ] Remove `UsageSyncService` and related dead code
+- [ ] Remove hidden `DeviceActivityReport` view from `NudgeApp.swift`
+
+### Known limitations / Phase 3 work
+
+- App-specific and category goal monitoring deferred to Phase 3 (need `ApplicationToken` from `FamilyActivityPicker`)
+- `session.timeout` uses accumulated daily total, not true continuous-session detection
+- `GoalSummary` needs a `categoryBundleIds: [String]` field added in Phase 3 for category events
 
 ---
 

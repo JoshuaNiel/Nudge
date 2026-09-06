@@ -182,6 +182,51 @@ Settled decisions and their rationale. Do not re-litigate these without good rea
 **Decision:** All SMS messages use plain text without emojis. Goal breach messages name the specific app (not "your goal"). Daily report messages list the top 3 apps by usage time.
 **Why:** Matches the tone established in the consent SMS (plain, conversational). App names make goal breach messages immediately actionable. Top 3 is enough context without making messages unwieldy.
 
+### ADR-043: DeviceActivityReport extension must be in Extensions/, not PlugIns/
+
+**Decision:** The `NudgeActivityReport` extension is embedded in the main app bundle's `Extensions/` directory, not `PlugIns/`.
+**Why:** `DeviceActivityReport` uses ExtensionKit, not the older NSExtension system. ExtensionKit extensions must live in `Extensions/`. Embedding in `PlugIns/` (Xcode's default for app extensions) causes `ClientError Code=2` at runtime — the system cannot discover the extension. Fix: in main app Build Phases, set the copy destination to "Extensions" not "Plug-ins".
+
+### ADR-044: DeviceActivityReport view must be non-zero size
+
+**Decision:** The hidden `DeviceActivityReport` view in `NudgeApp` uses `.frame(width: 1, height: 1).opacity(0)` rather than `.frame(width: 0, height: 0).clipped()`.
+**Why:** SwiftUI skips rendering views with zero frame size. A clipped zero-size view causes the DeviceActivityReport extension process to never be launched and `makeConfiguration` is never called.
+
+### ADR-045: DeviceActivityFilter requires today's DateInterval
+
+**Decision:** `DeviceActivityReport` is initialized with `DeviceActivityFilter(segment: .daily(during: Calendar.current.dateInterval(of: .day, for: Date())))`. The default `DeviceActivityFilter()` uses a zero-length `DateInterval` which returns no data.
+**Why:** The filter's `segment` determines which time window of data is passed to `makeConfiguration`. A zero-length interval passes nothing. Today's full day interval passes today's usage data.
+
+### ADR-046: Monitoring schedule must always be registered (even with no goal events)
+
+**Decision:** `MonitoringRegistrationService.registerMonitoring` always calls `DeviceActivityCenter.startMonitoring`, even when the events dictionary is empty.
+**Why:** `DeviceActivityReport` only has data for periods covered by a registered `DeviceActivitySchedule`. If no monitoring is registered, `makeConfiguration` receives an empty `DeviceActivityResults` regardless of actual phone usage. An empty events dictionary is valid — it registers the schedule for data collection without any threshold alerts.
+
+### ADR-047: UsageSyncService must wait for DeviceActivityReport extension
+
+**Decision:** `onForeground()` in `NudgeApp` waits 3 seconds after triggering the `DeviceActivityReport` re-render before calling `UsageSyncService.sync()`.
+**Why:** The extension runs in a separate OS process. `makeConfiguration` is async and takes 1–3 seconds to iterate `DeviceActivityResults` and write to the App Group. Without a delay, the sync always reads an empty App Group because it runs before the extension finishes writing.
+
+### ADR-048: ApplicationActivity bundle ID via app.application.bundleIdentifier
+
+**Decision:** In the DeviceActivityReport extension, the app bundle identifier is read as `app.application.bundleIdentifier` (returns `String?`) on `DeviceActivityData.ApplicationActivity`.
+**Why:** `ApplicationActivity` does not have a `.token: ApplicationToken` property. The application is accessed via the `.application` property (type `Application` from FamilyControls), which exposes `.bundleIdentifier: String?`. Apps with a nil bundle identifier (internal system processes) are skipped with `guard let`.
+
+### ADR-049: DeviceActivityReport extension is display-only; cannot write to App Group
+
+**Decision:** The `NudgeActivityReport` extension is used exclusively to render usage data on-device in the Phase 2 dashboard. It does not write to the App Group container or sync data to Supabase.
+
+**Why:** The `DeviceActivityReport` extension runs in a hardened OS sandbox that blocks all persistence and network I/O — including `UserDefaults(suiteName:)`, `FileManager` writes to the shared container, network calls, and Darwin notifications. This restriction is intentional (Apple prevents Screen Time data exfiltration to third-party servers) and is not a configuration issue. Confirmed via runtime error: "You don't have permission to save the file in the folder \<App Group UUID\>" even with correct entitlements and provisioning profile. An Apple DTS specialist has publicly confirmed this behavior on developer forums.
+
+**Consequence:** Per-app usage data (seconds, pickups per bundle ID per day) cannot be synced to Supabase. The `usage` table in Supabase is unused by the current implementation and is left in the schema for potential future use. All cloud functionality is driven by `DeviceActivityMonitor` threshold events.
+
+---
+
+### ADR-042: App-specific DeviceActivity monitoring deferred to Phase 3
+
+**Decision:** `MonitoringRegistrationService` only registers events for `total` and `session.timeout` goals in Phase 1. App-specific and category goals are skipped.
+**Why:** `DeviceActivityEvent.applications` requires `ApplicationToken` (an opaque type), which can only be obtained via `FamilyActivityPicker`. There is no public `Application(bundleIdentifier:)` API in the available SDK. The Phase 3 Goals UI will add `FamilyActivityPicker` for app selection and store the `FamilyActivitySelection` (encoded as PropertyList) to App Group so the registration service can read tokens at runtime.
+
 ### ADR-028: Two-init pattern for ViewModels with `@MainActor` service injection
 **Decision:** ViewModels that inject services use two separate inits: a no-argument production init (`init() { self.service = RealService() }`) and a testing init (`init(service: ServiceProtocol) { self.service = service }`). Do not use a single init with a default parameter value.
 **Why:** With `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, writing `init(service: ServiceProtocol = RealService())` produces "Call to main actor-isolated initializer in a synchronous nonisolated context" — the default expression is evaluated in a nonisolated context. Two separate inits avoids this entirely.
