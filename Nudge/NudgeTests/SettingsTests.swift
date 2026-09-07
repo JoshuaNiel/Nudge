@@ -31,6 +31,37 @@ struct E164ValidationTests {
     @Test func emptyStringFails() {
         #expect("".isValidE164 == false)
     }
+
+    // MARK: e164ValidationError — specific messages
+
+    @Test func validationErrorNilForValidNumber() {
+        #expect("+18015551234".e164ValidationError == nil)
+    }
+
+    @Test func validationErrorNilForEmpty() {
+        #expect("".e164ValidationError == nil)
+        #expect("   ".e164ValidationError == nil)
+    }
+
+    @Test func validationErrorMissingPlus() {
+        #expect("8015551234".e164ValidationError != nil)
+    }
+
+    @Test func validationErrorNonDigitChars() {
+        #expect("+1801abc1234".e164ValidationError != nil)
+    }
+
+    @Test func validationErrorLeadingZero() {
+        #expect("+0123456789".e164ValidationError != nil)
+    }
+
+    @Test func validationErrorTooShort() {
+        #expect("+1234567".e164ValidationError != nil)
+    }
+
+    @Test func validationErrorTooLong() {
+        #expect("+1234567890123456".e164ValidationError != nil)
+    }
 }
 
 // MARK: - Profile Model Coding
@@ -156,6 +187,8 @@ struct SettingsViewModelTests {
     @Test func saveWithEmptyPhonePassesNil() async {
         let mock = MockProfileService()
         let vm = SettingsViewModel(profileService: mock)
+        vm.firstName = "Grace"
+        vm.lastName = "Hopper"
         vm.phoneNumber = "   "
 
         await vm.save(userId: userId)
@@ -168,9 +201,12 @@ struct SettingsViewModelTests {
     @Test func saveWithInvalidPhoneSkipsServiceAndSetsError() async {
         let mock = MockProfileService()
         let vm = SettingsViewModel(profileService: mock)
+        vm.firstName = "Grace"
+        vm.lastName = "Hopper"
         vm.phoneNumber = "8015551234"
 
         #expect(vm.isPhoneValid == false)
+        #expect(vm.phoneError != nil)
 
         await vm.save(userId: userId)
 
@@ -184,6 +220,8 @@ struct SettingsViewModelTests {
         let mock = MockProfileService()
         mock.errorToThrow = GenericError()
         let vm = SettingsViewModel(profileService: mock)
+        vm.firstName = "Grace"
+        vm.lastName = "Hopper"
         vm.phoneNumber = "+18015551234"
 
         await vm.save(userId: userId)
@@ -191,6 +229,86 @@ struct SettingsViewModelTests {
         #expect(vm.errorMessage != nil)
         #expect(vm.didSave == false)
         #expect(vm.isSaving == false)
+    }
+
+    // MARK: - Dirty-state & required fields
+
+    @Test func noChangesAfterLoad() async {
+        let mock = MockProfileService()
+        mock.profileToReturn = makeProfile()
+        let vm = SettingsViewModel(profileService: mock)
+
+        await vm.load(userId: userId, email: "grace@example.com")
+
+        #expect(vm.hasChanges == false)
+        #expect(vm.canSave == false)
+    }
+
+    @Test func editingFieldFlipsHasChanges() async {
+        let mock = MockProfileService()
+        mock.profileToReturn = makeProfile()
+        let vm = SettingsViewModel(profileService: mock)
+
+        await vm.load(userId: userId, email: "grace@example.com")
+        vm.firstName = "Ada"
+
+        #expect(vm.hasChanges)
+        #expect(vm.canSave)
+    }
+
+    @Test func emptyFirstNameBlocksSave() async {
+        let mock = MockProfileService()
+        mock.profileToReturn = makeProfile()
+        let vm = SettingsViewModel(profileService: mock)
+
+        await vm.load(userId: userId, email: "grace@example.com")
+        vm.firstName = "   "
+
+        #expect(vm.firstNameError != nil)
+        #expect(vm.canSave == false)
+
+        await vm.save(userId: userId)
+        #expect(mock.updateCallCount == 0)
+    }
+
+    @Test func emptyLastNameBlocksSave() async {
+        let mock = MockProfileService()
+        mock.profileToReturn = makeProfile()
+        let vm = SettingsViewModel(profileService: mock)
+
+        await vm.load(userId: userId, email: "grace@example.com")
+        vm.lastName = ""
+
+        #expect(vm.lastNameError != nil)
+        #expect(vm.canSave == false)
+    }
+
+    @Test func invalidPhoneBlocksSave() async {
+        let mock = MockProfileService()
+        mock.profileToReturn = makeProfile()
+        let vm = SettingsViewModel(profileService: mock)
+
+        await vm.load(userId: userId, email: "grace@example.com")
+        vm.phoneNumber = "8015551234"
+
+        #expect(vm.phoneError != nil)
+        #expect(vm.canSave == false)
+    }
+
+    @Test func successfulSaveClearsChangesAndSetsDidSave() async {
+        let mock = MockProfileService()
+        mock.profileToReturn = makeProfile()
+        let vm = SettingsViewModel(profileService: mock)
+
+        await vm.load(userId: userId, email: "grace@example.com")
+        vm.firstName = "Ada"
+        #expect(vm.hasChanges)
+
+        await vm.save(userId: userId)
+
+        #expect(vm.didSave)
+        #expect(vm.errorMessage == nil)
+        #expect(vm.hasChanges == false)
     }
 }
 

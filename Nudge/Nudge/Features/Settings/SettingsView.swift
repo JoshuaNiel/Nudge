@@ -4,18 +4,27 @@ import Supabase
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @StateObject var viewModel = SettingsViewModel()
+    @FocusState private var focusedField: Field?
 
-    private var phoneWarningVisible: Bool {
-        !viewModel.phoneNumber.trimmingCharacters(in: .whitespaces).isEmpty && !viewModel.isPhoneValid
+    private enum Field {
+        case firstName, lastName, phoneNumber
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 profileSection
+                saveSection
                 accountSection
             }
             .navigationTitle("Settings")
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedField = nil }
+                }
+            }
         }
         .task {
             if let user = appState.currentUser {
@@ -28,35 +37,66 @@ struct SettingsView: View {
 
     private var profileSection: some View {
         Section {
-            TextField("First name", text: $viewModel.firstName)
-                .textContentType(.givenName)
+            labeledField("First Name") {
+                TextField("First name", text: $viewModel.firstName)
+                    .textContentType(.givenName)
+                    .multilineTextAlignment(.trailing)
+                    .focused($focusedField, equals: .firstName)
+            } error: {
+                viewModel.firstNameError
+            }
 
-            TextField("Last name", text: $viewModel.lastName)
-                .textContentType(.familyName)
+            labeledField("Last Name") {
+                TextField("Last name", text: $viewModel.lastName)
+                    .textContentType(.familyName)
+                    .multilineTextAlignment(.trailing)
+                    .focused($focusedField, equals: .lastName)
+            } error: {
+                viewModel.lastNameError
+            }
 
-            VStack(alignment: .leading, spacing: 4) {
+            labeledField("Phone Number") {
                 TextField("+18015551234", text: $viewModel.phoneNumber)
                     .keyboardType(.phonePad)
                     .textContentType(.telephoneNumber)
-
-                if phoneWarningVisible {
-                    Text("Enter a valid phone number, e.g. +18015551234.")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
+                    .multilineTextAlignment(.trailing)
+                    .focused($focusedField, equals: .phoneNumber)
+            } error: {
+                viewModel.phoneError
             }
-
-            saveRow
         } header: {
             Text("Profile")
         } footer: {
-            Text("Used only to receive your friend's replies as a text message. You can opt out at any time.")
+            Text("Phone is optional — used only to receive your friend's replies as a text message. You can opt out at any time.")
         }
     }
 
-    private var saveRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    /// A labeled row (leading label, trailing field) with an optional inline error below.
+    private func labeledField<Content: View>(
+        _ label: String,
+        @ViewBuilder content: () -> Content,
+        error: () -> String?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                    .foregroundStyle(.secondary)
+                content()
+            }
+            if let error = error() {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    // MARK: - Save
+
+    private var saveSection: some View {
+        Section {
             Button {
+                focusedField = nil
                 Task {
                     if let user = appState.currentUser {
                         await viewModel.save(userId: user.id)
@@ -77,12 +117,16 @@ struct SettingsView: View {
                 Text(errorMessage)
                     .font(.caption)
                     .foregroundStyle(.red)
-            } else if viewModel.didSave {
-                Text("Saved")
+            }
+        } footer: {
+            if viewModel.didSave {
+                Label("Saved", systemImage: "checkmark.circle.fill")
                     .font(.caption)
                     .foregroundStyle(.green)
+                    .transition(.opacity)
             }
         }
+        .animation(.easeInOut, value: viewModel.didSave)
     }
 
     // MARK: - Account

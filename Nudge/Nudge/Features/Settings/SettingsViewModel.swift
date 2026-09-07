@@ -16,6 +16,11 @@ class SettingsViewModel: ObservableObject {
 
     private let profileService: ProfileServiceProtocol
 
+    // Captured originals from the last load/save, used for dirty-state tracking.
+    private var originalFirstName: String = ""
+    private var originalLastName: String = ""
+    private var originalPhoneNumber: String = ""
+
     // Production init — uses real service
     init() {
         self.profileService = ProfileService()
@@ -34,8 +39,27 @@ class SettingsViewModel: ObservableObject {
         return trimmed.isEmpty || trimmed.isValidE164
     }
 
+    var firstNameError: String? {
+        firstName.trimmingCharacters(in: .whitespaces).isEmpty ? "First name is required." : nil
+    }
+
+    var lastNameError: String? {
+        lastName.trimmingCharacters(in: .whitespaces).isEmpty ? "Last name is required." : nil
+    }
+
+    var phoneError: String? {
+        phoneNumber.e164ValidationError
+    }
+
+    /// True if any field's trimmed value differs from the captured (trimmed) original.
+    var hasChanges: Bool {
+        firstName.trimmingCharacters(in: .whitespaces) != originalFirstName.trimmingCharacters(in: .whitespaces)
+            || lastName.trimmingCharacters(in: .whitespaces) != originalLastName.trimmingCharacters(in: .whitespaces)
+            || phoneNumber.trimmingCharacters(in: .whitespaces) != originalPhoneNumber.trimmingCharacters(in: .whitespaces)
+    }
+
     var canSave: Bool {
-        isPhoneValid && !isSaving
+        hasChanges && firstNameError == nil && lastNameError == nil && phoneError == nil && !isSaving
     }
 
     // MARK: - Actions
@@ -50,14 +74,16 @@ class SettingsViewModel: ObservableObject {
             firstName = profile.firstName ?? ""
             lastName = profile.lastName ?? ""
             phoneNumber = profile.phoneNumber ?? ""
+            captureOriginals()
         } catch {
             errorMessage = "Couldn't load your profile. Please try again."
         }
     }
 
     func save(userId: UUID) async {
-        guard isPhoneValid else {
-            errorMessage = "Enter a valid phone number, e.g. +18015551234."
+        // Defensive: the Save button is disabled unless these are all nil.
+        if let fieldError = firstNameError ?? lastNameError ?? phoneError {
+            errorMessage = fieldError
             return
         }
 
@@ -66,20 +92,38 @@ class SettingsViewModel: ObservableObject {
         isSaving = true
         defer { isSaving = false }
 
+        let trimmedFirstName = firstName.trimmingCharacters(in: .whitespaces)
+        let trimmedLastName = lastName.trimmingCharacters(in: .whitespaces)
         let trimmedPhone = phoneNumber.trimmingCharacters(in: .whitespaces)
         let phoneToSave = trimmedPhone.isEmpty ? nil : trimmedPhone
 
         do {
             try await profileService.updateProfile(
                 userId: userId,
-                firstName: firstName.trimmingCharacters(in: .whitespaces),
-                lastName: lastName.trimmingCharacters(in: .whitespaces),
+                firstName: trimmedFirstName,
+                lastName: trimmedLastName,
                 phoneNumber: phoneToSave
             )
+            // Reflect the just-saved values so `hasChanges` becomes false.
+            originalFirstName = trimmedFirstName
+            originalLastName = trimmedLastName
+            originalPhoneNumber = trimmedPhone
+            errorMessage = nil
             didSave = true
+            // Auto-fade the confirmation after a short delay.
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                didSave = false
+            }
         } catch {
             errorMessage = Self.userFacingMessage(for: error)
         }
+    }
+
+    private func captureOriginals() {
+        originalFirstName = firstName
+        originalLastName = lastName
+        originalPhoneNumber = phoneNumber
     }
 
     // MARK: - Error mapping
