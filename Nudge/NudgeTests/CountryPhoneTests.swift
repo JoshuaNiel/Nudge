@@ -135,3 +135,32 @@ struct USFormattingTests {
         #expect(formatNationalUS("80155512349999") == "(801) 555-1234")
     }
 }
+
+@Suite("BackspaceEditing")
+struct BackspaceEditingTests {
+
+    // Deleting the ")" from "(801)" leaves the same digits but a shorter string,
+    // so a digit should be dropped (otherwise the ")" just gets re-added).
+    @Test func backspaceOverClosingParenDropsDigit() {
+        #expect(adjustedDigits(old: "(801)", new: "(801") == "80")
+    }
+
+    @Test func backspaceDownToSingleDigit() {
+        #expect(adjustedDigits(old: "(8)", new: "(8") == "")
+    }
+
+    // Deleting an actual digit changes the digit count → keep the new digits.
+    @Test func deletingADigitIsHonored() {
+        #expect(adjustedDigits(old: "(801) 555", new: "(801) 55") == "80155")
+    }
+
+    // Typing a new digit lengthens the string → keep the new digits.
+    @Test func typingADigitIsHonored() {
+        #expect(adjustedDigits(old: "(801) 55", new: "(801) 555") == "801555")
+    }
+
+    // Non-formatted (non-US) input: deleting a digit is a normal digit deletion.
+    @Test func rawDigitsDeletion() {
+        #expect(adjustedDigits(old: "12345", new: "1234") == "1234")
+    }
+}

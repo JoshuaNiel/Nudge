@@ -191,3 +191,18 @@ func formatNationalUS(_ digits: String) -> String {
     let line = String(d[6..<d.count])
     return "(\(area)) \(prefix)-\(line)"
 }
+
+/// Resolve the national digits after an edit to a formatted field.
+///
+/// When a backspace only removed a *formatting* character (the text got shorter
+/// but the digit count is unchanged — e.g. deleting the ")" in "(801)"), drop the
+/// last digit instead, so deletion isn't stuck on the parentheses. Otherwise use
+/// the digits of the new value as-is (normal typing or digit deletion).
+func adjustedDigits(old: String, new: String) -> String {
+    let newDigits = new.filter(\.isNumber)
+    let oldDigits = old.filter(\.isNumber)
+    if new.count < old.count && newDigits.count == oldDigits.count {
+        return String(newDigits.dropLast())
+    }
+    return newDigits
+}

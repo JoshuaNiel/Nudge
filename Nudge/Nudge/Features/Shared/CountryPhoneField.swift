@@ -37,8 +37,8 @@ struct CountryPhoneField: View {
                 .keyboardType(.phonePad)
                 .textContentType(.telephoneNumber)
                 .focused(focused)
-                .onChange(of: nationalText) { _, newValue in
-                    handleNationalChange(newValue)
+                .onChange(of: nationalText) { oldValue, newValue in
+                    handleNationalChange(old: oldValue, new: newValue)
                 }
         }
         .onAppear(perform: initializeIfNeeded)
@@ -75,11 +75,12 @@ struct CountryPhoneField: View {
         nationalText = displayText(for: parsed.national, country: parsed.country)
     }
 
-    private func handleNationalChange(_ newValue: String) {
-        let digits = newValue.filter(\.isNumber)
+    private func handleNationalChange(old: String, new: String) {
+        // Deleting a formatting char (e.g. ")") should remove a digit, not get stuck.
+        let digits = adjustedDigits(old: old, new: new)
         let formatted = displayText(for: digits, country: selectedCountry)
         // Reflect formatting back into the field (US only re-formats).
-        if formatted != newValue {
+        if formatted != new {
             nationalText = formatted
         }
         e164 = composeE164(dialCode: selectedCountry.dialCode, national: digits)

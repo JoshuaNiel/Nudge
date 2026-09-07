@@ -156,6 +156,8 @@ struct SettingsView: View {
         .padding(.top, 8)
         .padding(.bottom, 8)
         .background(.bar)
+        // Keep the Save bar pinned to the bottom instead of riding up with the keyboard.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .animation(.easeInOut, value: viewModel.didSave)
     }
 }
