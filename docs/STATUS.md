@@ -1,7 +1,7 @@
 # Nudge — Project Status
 
 > **Read this first every session.** Update it at the end of each session.
-> Last updated: 2026-04-14
+> Last updated: 2026-09-06
 
 ---
 
@@ -9,22 +9,34 @@
 
 **Phase 5 — Social (Friends + SMS Nudges)** `[~] In Progress`
 
-Backend (Edge Functions) and iOS service/UI layer are complete. Remaining work:
-- APNs iOS registration (enable capability, register, store device token)
-- User phone number field in Settings
-- Nudge trigger system (blocked on Phase 1 — Family Controls entitlement)
-- Nudge trigger settings UI
-- Real-time nudge status updates in UI
+The nudge trigger path is validated end-to-end on device, and the Settings/profile layer
+(Phase 5G) is merged. Remaining Phase 5 work:
+- **5F — APNs iOS registration** — enable the Push Notifications capability in Xcode, register,
+  store the device token in `device_tokens`, and deep-link an incoming reply push to
+  `NudgeHistoryView`. **Not started — likely next session.** (Until it lands, friend replies reach
+  the user only via the SMS fallback, which requires a phone number set in Settings.)
+- **5H — Real-time nudge status** — Supabase Realtime subscription on `nudge` so history updates
+  live when a reply comes in. Not started.
+- **Nudge trigger settings UI** — only `profile.session_timeout_minutes` exists (set via SQL today);
+  no UI, and no storage/toggles for goal-breach or daily-report triggers yet.
 
-**Phase 1 — DeviceActivity Pipeline** `[~] In Progress`
+**Phase 1 — DeviceActivity Pipeline** `[x] Core done — validated on device (2026-09-06)`
 
-Core service layer and extension stubs complete. Remaining: Xcode target setup (manual GUI work) and on-device validation.
+Monitoring + nudge trigger validated end-to-end on device. **Strategy 1** (background `URLSession`
+from the monitor extension) proved non-functional (never reaches Supabase); replaced by
+**Strategy 2** — the extension enqueues a `PendingTrigger` to the App Group; the main app drains it
+(`NudgeTriggerService`) on foreground / `BGProcessingTask` and calls `send-nudge`. `send-nudge` is
+deployed with `--no-verify-jwt` (ES256 gateway bug; auth enforced in-function — see ADR-050).
+The remaining Phase-1-adjacent work is the **Phase 2 Dashboard** (on-device `DeviceActivityReport`
+display), not started.
 
-**Testing infrastructure** `[x] Done` — `NudgeTests` target with **43 passing tests** across Social, Goals, and model suites. Run with:
+**Testing** `[x]` — **119 passing unit tests** (Swift Testing). Run:
 ```
 xcodebuild test -project Nudge.xcodeproj -scheme Nudge \
   -destination 'platform=iOS Simulator,arch=arm64,id=19C7BD9B-6973-4F63-8492-C8D13401B835'
 ```
+Note: SwiftUI/keyboard/layout behavior is not unit-testable — on-device verification is still
+required for UI changes (see backlog re: adding a UI-test target).
 
 ---
 
@@ -33,11 +45,11 @@ xcodebuild test -project Nudge.xcodeproj -scheme Nudge \
 | Phase | Name | Status |
 |---|---|---|
 | 0 | Auth & Onboarding | `[x] Done` |
-| 1 | DeviceActivity Pipeline | `[ ] Ready to start` — entitlement approved; all open questions resolved |
-| 2 | Dashboard | `[ ]` — depends on Phase 1 data in Supabase |
-| 3 | Goals | `[ ] Ready` — no DeviceActivity dependency |
-| 4 | Notifications & Interventions | `[ ]` — depends on Phase 1 + 3 |
-| 5 | Social (Friends + SMS) | `[~] In Progress` — backend done; trigger system ready to start (Phase 1 unblocked) |
+| 1 | DeviceActivity + Nudge Trigger | `[x] Core done` — Strategy 2 validated on device; Dashboard (Phase 2) remains |
+| 2 | Dashboard | `[ ] Not started` — on-device `DeviceActivityReport` display |
+| 3 | Goals | `[~] Initial UI` — CRUD built; live progress wiring remains |
+| 4 | Notifications & Interventions | `[ ]` — depends on Phase 3 |
+| 5 | Social (Friends + SMS) | `[~] In Progress` — nudge trigger + Settings/phone done; APNs (5F) + realtime (5H) remain |
 
 ---
 
