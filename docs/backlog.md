@@ -67,4 +67,6 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 
 ## Known Bugs / Tech Debt
 
+- **Settings Save bar rides up with the keyboard.** The pinned Save button (`SettingsView.saveBar` via `.safeAreaInset(edge: .bottom)`) moves up above the keyboard when a field is focused. Desired behavior: pin it like the tab bar — stays at the physical bottom (keyboard covers it) while the Form still scrolls the focused field into view. A ZStack + `.ignoresSafeArea(.keyboard)` on the bar was attempted but didn't pin reliably and added layout churn (NaN/List-margin warnings), so it was reverted. Options to try: `.toolbar(placement: .bottomBar)`, a `UIViewRepresentable`/keyboard-height observer to offset manually, or a custom `safeAreaInset` that measures keyboard height. Needs device iteration.
+
 - **Email confirmation deep link not wired up** — Supabase sends a `localhost` confirmation URL. Fix: register `nudge://` URL scheme, set Site URL + Redirect URLs in Supabase dashboard, handle `.onOpenURL` in `NudgeApp.swift` calling `supabase.auth.session(from: url)`. Email confirmation is currently disabled in Supabase for development.

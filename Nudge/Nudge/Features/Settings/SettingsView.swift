@@ -13,25 +13,12 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack(alignment: .bottom) {
-                Form {
-                    accountSection
-                    profileSection
-                    // Spacer so the last rows can scroll clear of the pinned Save bar.
-                    Section {
-                        Color.clear
-                            .frame(height: 64)
-                            .listRowBackground(Color.clear)
-                    }
-                }
-                .scrollDismissesKeyboard(.interactively)
-
-                // Pinned like the tab bar: it stays at the bottom and the keyboard
-                // covers it, while the Form still scrolls the focused field into view.
-                saveBar
-                    .ignoresSafeArea(.keyboard, edges: .bottom)
+            Form {
+                accountSection
+                profileSection
             }
             .navigationTitle("Settings")
+            .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -40,6 +27,10 @@ struct SettingsView: View {
                         phoneFocused = false
                     }
                 }
+            }
+            // NOTE: keyboard-immune "pin like the tab bar" is deferred (see backlog).
+            .safeAreaInset(edge: .bottom) {
+                saveBar
             }
         }
         .task {
