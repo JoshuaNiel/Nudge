@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @StateObject var viewModel = SettingsViewModel()
     @FocusState private var focusedField: Field?
+    @FocusState private var phoneFocused: Bool
 
     private enum Field {
         case firstName, lastName, phoneNumber
@@ -21,7 +22,10 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
-                    Button("Done") { focusedField = nil }
+                    Button("Done") {
+                        focusedField = nil
+                        phoneFocused = false
+                    }
                 }
             }
             // Pinned to the bottom so it doesn't scroll with the settings.
@@ -75,11 +79,7 @@ struct SettingsView: View {
             }
 
             labeledField("Phone Number") {
-                TextField("+18015551234", text: $viewModel.phoneNumber)
-                    .keyboardType(.phonePad)
-                    .textContentType(.telephoneNumber)
-                    .multilineTextAlignment(.trailing)
-                    .focused($focusedField, equals: .phoneNumber)
+                CountryPhoneField(e164: $viewModel.phoneNumber, focused: $phoneFocused)
             } error: {
                 viewModel.phoneError
             }
