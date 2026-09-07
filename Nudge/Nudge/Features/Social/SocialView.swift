@@ -205,6 +205,8 @@ private struct AddFriendSheet: View {
     @State private var phoneNumber = ""
     @State private var isLoading = false
     @State private var errorMessage: String? = nil
+    @FocusState private var isInputActive: Bool
+    @FocusState private var phoneFocused: Bool
 
     private var isFormValid: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty &&
@@ -218,6 +220,7 @@ private struct AddFriendSheet: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Name").font(.headline).padding(.horizontal, 24)
                         TextField("Friend's name", text: $name)
+                            .focused($isInputActive)
                             .padding(12)
                             .background(Color(.secondarySystemGroupedBackground))
                             .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -226,15 +229,10 @@ private struct AddFriendSheet: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Phone Number").font(.headline).padding(.horizontal, 24)
-                        TextField("+1 (801) 555-1234", text: $phoneNumber)
-                            .keyboardType(.phonePad)
+                        CountryPhoneField(e164: $phoneNumber, focused: $phoneFocused)
                             .padding(12)
                             .background(Color(.secondarySystemGroupedBackground))
                             .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .padding(.horizontal, 24)
-                        Text("International format required, e.g. +18015551234")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                             .padding(.horizontal, 24)
                     }
 
@@ -268,17 +266,24 @@ private struct AddFriendSheet: View {
             }
             .navigationTitle("Add Friend")
             .navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { onCompleted() }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        isInputActive = false
+                        phoneFocused = false
+                    }
                 }
             }
         }
     }
 
     private func isValidE164(_ phone: String) -> Bool {
-        let pattern = #"^\+[1-9]\d{7,14}$"#
-        return phone.range(of: pattern, options: .regularExpression) != nil
+        phone.isValidE164
     }
 }
 
