@@ -6,6 +6,11 @@ import SwiftUI
 /// The bound `e164` is `""` when the field is empty (opted out), otherwise
 /// `"+<dialCode><nationalDigits>"`. This component is presentation-only: validation
 /// is the parent's responsibility (via `String.e164ValidationError`).
+///
+/// The raw national `digits` are the single source of truth; the displayed text is
+/// derived from them. Editing flows through `nationalBinding` (no `onChange`
+/// write-back), which avoids the reentrant reformat that made backspace delete two
+/// digits at once.
 struct CountryPhoneField: View {
     @Binding var e164: String
     /// External focus for the national-number field, so a parent "Done" toolbar
@@ -13,9 +18,22 @@ struct CountryPhoneField: View {
     var focused: FocusState<Bool>.Binding
 
     @State private var selectedCountry: Country = .default
-    @State private var nationalText: String = ""
+    @State private var digits: String = ""
     @State private var showingPicker = false
     @State private var didInitialize = false
+
+    /// The TextField reads the formatted number and, on edit, resolves back to digits —
+    /// dropping a digit when only a formatting character (e.g. ")") was removed.
+    private var nationalBinding: Binding<String> {
+        Binding(
+            get: { displayText(for: digits, country: selectedCountry) },
+            set: { newText in
+                let current = displayText(for: digits, country: selectedCountry)
+                digits = adjustedDigits(old: current, new: newText)
+                e164 = composeE164(dialCode: selectedCountry.dialCode, national: digits)
+            }
+        )
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -33,13 +51,10 @@ struct CountryPhoneField: View {
             }
             .buttonStyle(.plain)
 
-            TextField("Phone number", text: $nationalText)
+            TextField("Phone number", text: nationalBinding)
                 .keyboardType(.phonePad)
                 .textContentType(.telephoneNumber)
                 .focused(focused)
-                .onChange(of: nationalText) { oldValue, newValue in
-                    handleNationalChange(old: oldValue, new: newValue)
-                }
         }
         .onAppear(perform: initializeIfNeeded)
         .onChange(of: e164) { _, newValue in
@@ -61,35 +76,22 @@ struct CountryPhoneField: View {
         didInitialize = true
         let parsed = parseE164(e164)
         selectedCountry = parsed.country
-        nationalText = displayText(for: parsed.national, country: parsed.country)
+        digits = parsed.national
     }
 
-    /// Re-derive internal state from a binding change originating outside the field.
+    /// Re-derive internal state from a binding change originating outside the field,
+    /// ignoring echoes of the value this field just produced itself.
     private func syncFromBinding(_ newValue: String) {
-        // Ignore echoes of the value we just produced ourselves.
-        if newValue == composeE164(dialCode: selectedCountry.dialCode, national: nationalText) {
+        if newValue == composeE164(dialCode: selectedCountry.dialCode, national: digits) {
             return
         }
         let parsed = parseE164(newValue)
         selectedCountry = parsed.country
-        nationalText = displayText(for: parsed.national, country: parsed.country)
-    }
-
-    private func handleNationalChange(old: String, new: String) {
-        // Deleting a formatting char (e.g. ")") should remove a digit, not get stuck.
-        let digits = adjustedDigits(old: old, new: new)
-        let formatted = displayText(for: digits, country: selectedCountry)
-        // Reflect formatting back into the field (US only re-formats).
-        if formatted != new {
-            nationalText = formatted
-        }
-        e164 = composeE164(dialCode: selectedCountry.dialCode, national: digits)
+        digits = parsed.national
     }
 
     private func selectCountry(_ country: Country) {
-        let digits = nationalText.filter(\.isNumber)
         selectedCountry = country
-        nationalText = displayText(for: digits, country: country)
         e164 = composeE164(dialCode: country.dialCode, national: digits)
         showingPicker = false
     }

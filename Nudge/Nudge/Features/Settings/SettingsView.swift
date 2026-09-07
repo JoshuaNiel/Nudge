@@ -32,6 +32,8 @@ struct SettingsView: View {
             .safeAreaInset(edge: .bottom) {
                 saveBar
             }
+            // Keep the whole Form + Save bar from riding up when the keyboard appears.
+            .ignoresSafeArea(.keyboard, edges: .bottom)
         }
         .task {
             if let user = appState.currentUser {
@@ -156,8 +158,6 @@ struct SettingsView: View {
         .padding(.top, 8)
         .padding(.bottom, 8)
         .background(.bar)
-        // Keep the Save bar pinned to the bottom instead of riding up with the keyboard.
-        .ignoresSafeArea(.keyboard, edges: .bottom)
         .animation(.easeInOut, value: viewModel.didSave)
     }
 }
