@@ -13,9 +13,8 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                profileSection
-                saveSection
                 accountSection
+                profileSection
             }
             .navigationTitle("Settings")
             .scrollDismissesKeyboard(.interactively)
@@ -25,10 +24,30 @@ struct SettingsView: View {
                     Button("Done") { focusedField = nil }
                 }
             }
+            // Pinned to the bottom so it doesn't scroll with the settings.
+            .safeAreaInset(edge: .bottom) {
+                saveBar
+            }
         }
         .task {
             if let user = appState.currentUser {
                 await viewModel.load(userId: user.id, email: user.email ?? "")
+            }
+        }
+    }
+
+    // MARK: - Account (top)
+
+    private var accountSection: some View {
+        Section("Account") {
+            LabeledContent("Email", value: viewModel.email)
+
+            Button(role: .destructive) {
+                Task {
+                    try? await appState.authService.signOut()
+                }
+            } label: {
+                Text("Sign Out")
             }
         }
     }
@@ -91,10 +110,24 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Save
+    // MARK: - Pinned Save bar (bottom, detached from the scroll)
 
-    private var saveSection: some View {
-        Section {
+    private var saveBar: some View {
+        VStack(spacing: 8) {
+            // Transient feedback above the button.
+            if let errorMessage = viewModel.errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if viewModel.didSave {
+                Label("Saved", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
+            }
+
             Button {
                 focusedField = nil
                 Task {
@@ -103,46 +136,27 @@ struct SettingsView: View {
                     }
                 }
             } label: {
-                HStack {
-                    Text("Save")
+                HStack(spacing: 8) {
                     if viewModel.isSaving {
-                        Spacer()
-                        ProgressView()
+                        ProgressView().tint(.white)
                     }
+                    Text(viewModel.isSaving ? "Saving…" : "Save")
+                        .fontWeight(.semibold)
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                // The WHOLE button changes color with state, not just the label.
+                .background(viewModel.canSave ? Color.accentColor : Color(.systemGray4))
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .disabled(!viewModel.canSave)
-
-            if let errorMessage = viewModel.errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-        } footer: {
-            if viewModel.didSave {
-                Label("Saved", systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-                    .transition(.opacity)
-            }
         }
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .background(.bar)
         .animation(.easeInOut, value: viewModel.didSave)
-    }
-
-    // MARK: - Account
-
-    private var accountSection: some View {
-        Section("Account") {
-            LabeledContent("Email", value: viewModel.email)
-
-            Button(role: .destructive) {
-                Task {
-                    try? await appState.authService.signOut()
-                }
-            } label: {
-                Text("Sign Out")
-            }
-        }
     }
 }
 
