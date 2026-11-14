@@ -30,6 +30,29 @@ class SocialViewModel: ObservableObject {
         }
     }
 
+    /// Resolves a reply push's nudge to the accepted friend whose history should open.
+    ///
+    /// Returns nil — never sets `error` — when the nudge or friend can't be found or the
+    /// lookup fails; the caller then just shows the friend list. If the friend isn't in the
+    /// loaded list (it may be stale), the list is refetched once.
+    func friendForNudge(id nudgeId: Int, userId: UUID) async -> Friend? {
+        guard let friendId = try? await friendService.fetchFriendId(forNudgeId: nudgeId) else {
+            return nil
+        }
+        if let friend = acceptedFriend(id: friendId) {
+            return friend
+        }
+        guard let refreshed = try? await friendService.fetchFriends(userId: userId) else {
+            return nil
+        }
+        friends = refreshed
+        return acceptedFriend(id: friendId)
+    }
+
+    private func acceptedFriend(id: Int) -> Friend? {
+        friends.first { $0.id == id && $0.status == .accepted }
+    }
+
     func deleteFriend(_ friend: Friend) async {
         do {
             try await friendService.deleteFriend(id: friend.id)

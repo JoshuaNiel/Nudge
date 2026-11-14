@@ -23,6 +23,9 @@ class AppState: ObservableObject {
     let authService = AuthService()
     private let friendService = FriendService()
 
+    /// This device's APNs token, uploaded for whichever user is signed in.
+    let pushTokens = PushTokenManager()
+
     init() {
         Task {
             await observeAuthState()
@@ -58,11 +61,24 @@ class AppState: ObservableObject {
                 currentUser = nil
                 isAuthenticated = false
                 userFirstName = ""
+                pushTokens.userDidSignOut()
                 clearAppGroup()
             default:
                 break
             }
         }
+    }
+
+    // MARK: - Sign out
+
+    /// Signs the user out, first removing this device's push token so a signed-out device
+    /// stops receiving the user's reply pushes. The token delete must run while the session
+    /// is still valid (RLS), and is best-effort: sign-out proceeds even if it fails.
+    func signOut() async throws {
+        if let userId = currentUser?.id {
+            await pushTokens.unregisterDevice(userId: userId)
+        }
+        try await authService.signOut()
     }
 
     // MARK: - App Group sync
@@ -73,6 +89,7 @@ class AppState: ObservableObject {
         writeSecretsToAppGroup(session: session)
         await fetchAndCacheProfile(userId: session.user.id)
         await syncFriendsToAppGroup(userId: session.user.id)
+        await pushTokens.userDidSignIn(userId: session.user.id)
     }
 
     /// Writes the three App Group secrets the monitor extension needs to call send-nudge.

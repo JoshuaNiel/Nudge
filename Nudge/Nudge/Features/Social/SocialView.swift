@@ -1,16 +1,27 @@
 import SwiftUI
 import Supabase
 
+// MARK: - SocialRoute
+
+/// Value-based destinations for the Friends NavigationStack (lets a push deep link set the path).
+private enum SocialRoute: Hashable {
+    case nudgeHistory(Friend)
+}
+
 // MARK: - SocialView
 
 struct SocialView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var pushRouter: PushRouter
     @StateObject private var viewModel = SocialViewModel()
 
     @State private var showAddFriend = false
+    @State private var path: [SocialRoute] = []
+    /// True once the first friend-list load has finished; deep links wait for it.
+    @State private var hasLoaded = false
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if viewModel.isLoading {
                     ProgressView()
@@ -24,6 +35,12 @@ struct SocialView: View {
                 }
             }
             .navigationTitle("Friends")
+            .navigationDestination(for: SocialRoute.self) { route in
+                switch route {
+                case .nudgeHistory(let friend):
+                    NudgeHistoryView(friend: friend)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -44,6 +61,14 @@ struct SocialView: View {
             .task {
                 guard let userId = appState.currentUser?.id else { return }
                 await viewModel.load(userId: userId)
+                hasLoaded = true
+                // Cold start / tab switch: a push tap may be waiting for the list to load.
+                await openPendingDeepLink()
+            }
+            // Warm start while this view already exists: act on a new tap immediately.
+            .onChange(of: pushRouter.pendingNudgeId) { _, nudgeId in
+                guard nudgeId != nil, hasLoaded else { return }
+                Task { await openPendingDeepLink() }
             }
         }
     }
@@ -88,9 +113,7 @@ struct SocialView: View {
             if !accepted.isEmpty {
                 Section("Friends") {
                     ForEach(accepted) { friend in
-                        NavigationLink {
-                            NudgeHistoryView(friend: friend)
-                        } label: {
+                        NavigationLink(value: SocialRoute.nudgeHistory(friend)) {
                             AcceptedFriendRow(friend: friend)
                         }
                     }
@@ -133,6 +156,19 @@ struct SocialView: View {
 // MARK: - Actions
 
 extension SocialView {
+    // MARK: - Push deep link
+
+    /// Opens the nudge history for the friend a tapped reply push belongs to. If the nudge or
+    /// friend can't be resolved, the user simply stays on the friend list — no error shown.
+    private func openPendingDeepLink() async {
+        guard let userId = appState.currentUser?.id,
+              let nudgeId = pushRouter.consumePendingNudgeId() else { return }
+        guard let friend = await viewModel.friendForNudge(id: nudgeId, userId: userId) else { return }
+        path = [.nudgeHistory(friend)]
+    }
+
+    // MARK: - Friends
+
     private func deleteFriends(from list: [Friend], at offsets: IndexSet) {
         for index in offsets {
             let friend = list[index]
@@ -146,6 +182,7 @@ extension SocialView {
 #Preview {
     SocialView()
         .environmentObject(AppState())
+        .environmentObject(PushRouter())
 }
 
 // MARK: - AcceptedFriendRow
