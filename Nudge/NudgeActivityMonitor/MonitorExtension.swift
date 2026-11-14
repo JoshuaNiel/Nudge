@@ -1,19 +1,17 @@
-// NudgeMonitor/MonitorExtension.swift
+// NudgeActivityMonitor/MonitorExtension.swift
 //
 // DeviceActivityMonitor extension target.
 //
-// SETUP REQUIRED (Xcode GUI):
-// 1. File → New → Target → "Device Activity Monitor Extension"
-// 2. Name it "NudgeMonitor"
-// 3. Add capabilities: Family Controls + App Groups (group.com.joshuaqn.Nudge)
-// 4. Add this file to the NudgeMonitor target
-// 5. Set NSExtensionPrincipalClass in NudgeMonitor's Info.plist to:
-//    $(PRODUCT_MODULE_NAME).NudgeMonitor
+// SETUP (already done in Xcode):
+// 1. Target type "Device Activity Monitor Extension", named "NudgeActivityMonitor"
+// 2. Capabilities: Family Controls + App Groups (group.com.joshuaqn.Nudge)
+// 3. NSExtensionPrincipalClass = $(PRODUCT_MODULE_NAME).NudgeMonitor
 //
-// SHARED TYPES NOTE:
-// GoalSummary, FriendSummary, PendingTrigger, and AppGroupKeys constants are
-// duplicated below because this extension is a separate bundle from the main app.
-// When Phase 3 adds a shared framework, move them there.
+// SHARED TYPES:
+// GoalSummary, PendingTrigger, AppGroupKeys, NudgeMessages and MonitoringPlan all
+// come from the `Shared/` folder, which is compiled into this target as well as
+// the main app. Do not re-declare them here — a private copy that drifts from the
+// app's version silently disarms monitoring.
 
 import Foundation
 import DeviceActivity
@@ -23,61 +21,9 @@ import os
 
 private let logger = Logger(subsystem: "com.joshuaqn.Nudge.NudgeActivityMonitor", category: "NudgeMonitor")
 
-// MARK: - Shared type copies (duplicated from main app — move to shared framework later)
-
-private struct GoalSummary: Codable {
-    let goalId: Int
-    let eventName: String
-    let limitSeconds: Int
-    let targetLabel: String
-    let appBundleId: String?
-
-    enum CodingKeys: String, CodingKey {
-        case goalId       = "goal_id"
-        case eventName    = "event_name"
-        case limitSeconds = "limit_seconds"
-        case targetLabel  = "target_label"
-        case appBundleId  = "app_bundle_id"
-    }
-}
-
-private struct FriendSummary: Codable {
-    let id: Int
-}
-
-/// Strategy 2: the extension can't see the main app's `PendingTrigger` type
-/// (separate bundle), so it keeps an inline copy with matching CodingKeys.
-private struct PendingTrigger: Codable {
-    let eventName: String
-    let report: String
-    let timestamp: Date
-
-    enum CodingKeys: String, CodingKey {
-        case eventName = "event_name"
-        case report
-        case timestamp
-    }
-}
-
-private enum AppGroupSuite {
-    static let name          = "group.com.joshuaqn.Nudge"
-    static let supabaseUrl   = "nudge.auth.supabaseUrl"
-    static let anonKey       = "nudge.auth.anonKey"
-    static let jwt           = "nudge.auth.jwt"
-    static let userFirstName = "nudge.user.firstName"
-    static let goalsActive   = "nudge.goals.active"
-    static let friendsAccepted = "nudge.friends.accepted"
-    static let triggersPending = "nudge.triggers.pending"
-    static let midnightSyncNeeded = "nudge.sync.midnightNeeded"
-}
-
-private enum BGTaskIDs {
-    static let nudgeTrigger = "com.joshuaqn.Nudge.nudge-trigger"
-}
-
-// MARK: - Monitor
-
 class NudgeMonitor: DeviceActivityMonitor {
+
+    private var defaults: UserDefaults? { UserDefaults(suiteName: AppGroupKeys.suiteName) }
 
     // MARK: - Threshold fired
 
@@ -86,90 +32,115 @@ class NudgeMonitor: DeviceActivityMonitor {
         activity: DeviceActivityName
     ) {
         let eventName = event.rawValue
-        logger.debug("[NudgeMonitor] eventDidReachThreshold: \(eventName, privacy: .public)")
+        logger.log("eventDidReachThreshold: \(eventName, privacy: .public)")
 
-        let defaults = UserDefaults(suiteName: AppGroupSuite.name)
-        let userName = defaults?.string(forKey: AppGroupSuite.userFirstName) ?? "Your friend"
-        let goals = loadGoalSummaries(from: defaults)
-
-        logger.debug("[NudgeMonitor] loaded \(goals.count) goals")
+        let defaults = self.defaults
+        let userName = defaults?.string(forKey: AppGroupKeys.userFirstName) ?? "Your friend"
+        let goals = MonitoringPlan.loadSummaries(from: defaults)
 
         guard let matchedGoal = goals.first(where: { $0.eventName == eventName }) else {
-            logger.error("[NudgeMonitor] no goal matched event '\(eventName, privacy: .public)' — registered goals: \(goals.map(\.eventName).joined(separator: ", "), privacy: .public)")
+            // Surfaced as a notification, not just a log line: an unmatched event is
+            // indistinguishable from "the threshold never fired" from the user's side,
+            // which is exactly what made the day-2 silence so hard to diagnose.
+            logger.error("no goal matched event '\(eventName, privacy: .public)' — registered: \(goals.map(\.eventName).joined(separator: ", "), privacy: .public)")
+            postLocalNotification(
+                eventName: eventName,
+                title: "Nudge misconfigured",
+                body: "A limit was reached but Nudge has no matching goal saved. Open Nudge to resync."
+            )
             return
         }
 
-        logger.debug("[NudgeMonitor] matched goal: \(matchedGoal.targetLabel, privacy: .public), limit: \(matchedGoal.limitSeconds)s")
+        let reportText = NudgeMessages.reportForGoal(userName: userName, goalSummary: matchedGoal)
+        logger.log("matched \(matchedGoal.targetLabel, privacy: .public) — report: \(reportText, privacy: .public)")
 
-        let reportText = buildReport(userName: userName, goal: matchedGoal)
-        logger.debug("[NudgeMonitor] report text: \(reportText, privacy: .public)")
+        // 1. Local notification — no network needed, so this always lands.
+        postLocalNotification(eventName: eventName, title: "Nudge sent", body: reportText)
 
-        // 1. Post local notification immediately (no network needed)
-        postLocalNotification(eventName: eventName, body: reportText)
+        // 2. Strategy 2 (ADR-034): the extension's own network calls never reach
+        //    Supabase, so queue the trigger for the main app to send.
+        enqueuePendingTrigger(eventName: eventName, report: reportText)
 
-        // 2. Strategy 2: enqueue a PendingTrigger for the main app to send. The
-        //    extension's own network calls have proven unreliable on-device.
-        enqueuePendingTrigger(eventName: eventName, report: reportText, defaults: defaults)
-
-        // 3. Best-effort: ask the OS to wake the main app sooner to drain the queue.
+        // 3. Ask the OS to wake the main app to drain the queue.
         scheduleMainAppProcessing()
+
+        // 4. Safety net: if this event fired on a day we have not registered for,
+        //    the registration is stale. Re-arm now (no-op on the normal path).
+        reregisterIfNeeded(reason: "eventDidReachThreshold")
     }
 
-    // MARK: - Strategy 2: enqueue pending trigger
+    // MARK: - Interval boundaries
 
-    private func enqueuePendingTrigger(eventName: String, report: String, defaults: UserDefaults?) {
+    /// Midnight. **This is the primary re-arm path** and the reason monitoring keeps
+    /// working with the app never opened: a `DeviceActivityEvent` threshold fires at
+    /// most once per `startMonitoring` call, and iOS does not reliably re-arm spent
+    /// thresholds when a `repeats: true` interval rolls over (ADR-054).
+    override func intervalDidStart(for activity: DeviceActivityName) {
+        logger.log("intervalDidStart — clearing day-scoped state and re-arming")
+        defaults?.removeObject(forKey: AppGroupKeys.midnightSyncNeeded)
+        reregisterIfNeeded(reason: "intervalDidStart")
+    }
+
+    override func intervalDidEnd(for activity: DeviceActivityName) {
+        logger.log("intervalDidEnd — setting midnightSyncNeeded flag")
+        defaults?.set(true, forKey: AppGroupKeys.midnightSyncNeeded)
+    }
+
+    // MARK: - Re-registration
+
+    /// Re-registers monitoring from the App Group copy of the goal set, but only
+    /// when the day stamp or goal signature says the current registration is stale.
+    ///
+    /// The guard is what makes this loop-safe: re-registering inside
+    /// `intervalDidStart` provokes another `intervalDidStart`, and that second pass
+    /// sees today's stamp already written and stops.
+    private func reregisterIfNeeded(reason: String) {
+        let didRegister = MonitoringPlan.reregisterFromAppGroupIfNeeded(
+            center: DeviceActivityCenter(),
+            defaults: defaults,
+            now: Date(),
+            calendar: .current
+        )
+        logger.log("reregisterIfNeeded(\(reason, privacy: .public)) — registered: \(didRegister)")
+    }
+
+    // MARK: - Strategy 2 queue
+
+    private func enqueuePendingTrigger(eventName: String, report: String) {
         guard let defaults else {
-            logger.error("[NudgeMonitor] App Group defaults unavailable — cannot enqueue trigger")
+            logger.error("App Group defaults unavailable — cannot enqueue trigger")
             return
         }
 
-        var pending: [PendingTrigger] = []
-        if let data = defaults.data(forKey: AppGroupSuite.triggersPending),
-           let existing = try? JSONDecoder().decode([PendingTrigger].self, from: data) {
-            pending = existing
-        }
-
+        var pending = MonitoringPlan.loadPendingTriggers(from: defaults)
         pending.append(PendingTrigger(eventName: eventName, report: report, timestamp: Date()))
 
         guard let encoded = try? JSONEncoder().encode(pending) else {
-            logger.error("[NudgeMonitor] failed to encode pending triggers")
+            logger.error("failed to encode pending triggers")
             return
         }
-        defaults.set(encoded, forKey: AppGroupSuite.triggersPending)
-        logger.debug("[NudgeMonitor] enqueued pending trigger — queue size now \(pending.count)")
+        defaults.set(encoded, forKey: AppGroupKeys.triggersPending)
+        logger.log("enqueued pending trigger — queue size now \(pending.count)")
     }
 
     private func scheduleMainAppProcessing() {
-        let request = BGProcessingTaskRequest(identifier: BGTaskIDs.nudgeTrigger)
+        let request = BGProcessingTaskRequest(identifier: BGTaskIdentifiers.nudgeTrigger)
         request.requiresNetworkConnectivity = true
         request.requiresExternalPower = false
         do {
             try BGTaskScheduler.shared.submit(request)
-            logger.debug("[NudgeMonitor] scheduled main-app nudge-trigger processing")
+            logger.log("scheduled main-app nudge-trigger processing")
         } catch {
-            logger.error("[NudgeMonitor] failed to schedule BG task: \(error.localizedDescription, privacy: .public)")
+            // Non-fatal: the queue still drains the next time the app is foregrounded.
+            logger.error("failed to schedule BG task: \(error.localizedDescription, privacy: .public)")
         }
-    }
-
-    // MARK: - Schedule end (midnight)
-
-    override func intervalDidEnd(for activity: DeviceActivityName) {
-        logger.debug("[NudgeMonitor] intervalDidEnd — setting midnightSyncNeeded flag")
-        let defaults = UserDefaults(suiteName: AppGroupSuite.name)
-        defaults?.set(true, forKey: AppGroupSuite.midnightSyncNeeded)
-    }
-
-    override func intervalDidStart(for activity: DeviceActivityName) {
-        logger.debug("[NudgeMonitor] intervalDidStart — clearing day-scoped state")
-        let defaults = UserDefaults(suiteName: AppGroupSuite.name)
-        defaults?.removeObject(forKey: AppGroupSuite.midnightSyncNeeded)
     }
 
     // MARK: - Local notification
 
-    private func postLocalNotification(eventName: String, body: String) {
+    private func postLocalNotification(eventName: String, title: String, body: String) {
         let content = UNMutableNotificationContent()
-        content.title = "Nudge sent"
+        content.title = title
         content.body = body
         content.sound = .default
 
@@ -180,38 +151,8 @@ class NudgeMonitor: DeviceActivityMonitor {
         )
         UNUserNotificationCenter.current().add(request) { error in
             if let error {
-                logger.error("[NudgeMonitor] failed to post local notification: \(error.localizedDescription, privacy: .public)")
-            } else {
-                logger.debug("[NudgeMonitor] local notification posted")
+                logger.error("failed to post local notification: \(error.localizedDescription, privacy: .public)")
             }
         }
-    }
-
-    // MARK: - App Group readers
-
-    private func loadGoalSummaries(from defaults: UserDefaults?) -> [GoalSummary] {
-        guard let data = defaults?.data(forKey: AppGroupSuite.goalsActive),
-              let goals = try? JSONDecoder().decode([GoalSummary].self, from: data) else {
-            logger.error("[NudgeMonitor] failed to load goals from App Group")
-            return []
-        }
-        return goals
-    }
-
-    // MARK: - Message formatting (duplicated from NudgeMessages.swift — move to shared framework)
-
-    private func buildReport(userName: String, goal: GoalSummary) -> String {
-        let limitMinutes = goal.limitSeconds / 60
-
-        if goal.eventName == "session.timeout" {
-            return "\(userName) has been on their phone for \(limitMinutes) minutes."
-        }
-        if goal.eventName.hasPrefix("app.") {
-            return "\(userName) just hit their \(limitMinutes)-minute limit on \(goal.targetLabel)."
-        }
-        if goal.eventName.hasPrefix("category.") {
-            return "\(userName) just hit their \(limitMinutes)-minute limit on \(goal.targetLabel)."
-        }
-        return "\(userName) just hit their \(limitMinutes)-minute daily screen time limit."
     }
 }

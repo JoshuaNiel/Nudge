@@ -86,7 +86,13 @@ class AppState: ObservableObject {
         defaults?.set(session.accessToken, forKey: AppGroupKeys.jwt)
     }
 
-    func fetchAndCacheProfile(userId: UUID) async {
+    /// Loads the profile into `AppState` and mirrors the first name to the App Group.
+    ///
+    /// Returns whether the fetch succeeded. Callers that arm DeviceActivity
+    /// monitoring must check it: a silent failure leaves `sessionTimeoutMinutes`
+    /// at `nil`, which would register monitoring without the session-timeout event.
+    @discardableResult
+    func fetchAndCacheProfile(userId: UUID) async -> Bool {
         struct ProfileRow: Decodable {
             let firstName: String?
             let timeZone: String?
@@ -104,7 +110,7 @@ class AppState: ObservableObject {
             .eq("user_id", value: userId)
             .single()
             .execute()
-            .value else { return }
+            .value else { return false }
 
         let name = row.firstName ?? ""
         userFirstName = name
@@ -113,6 +119,7 @@ class AppState: ObservableObject {
             timeZone = tz
         }
         UserDefaults(suiteName: AppGroupKeys.suiteName)?.set(name, forKey: AppGroupKeys.userFirstName)
+        return true
     }
 
     private func syncFriendsToAppGroup(userId: UUID) async {

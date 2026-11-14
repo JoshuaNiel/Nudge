@@ -58,6 +58,41 @@ Phase 2 uses this extension to power the dashboard. See `specs/phase-2-dashboard
 
 ## Full Data Flow
 
+### Keeping Monitoring Armed (ADR-054)
+
+A `DeviceActivityEvent` threshold fires **at most once per `startMonitoring` call**. iOS
+does not reliably re-arm spent thresholds when a `repeats: true` daily interval rolls over
+at midnight, so monitoring must be re-registered explicitly or the app goes silent after
+its first triggered day.
+
+Registration state lives in two App Group stamps written by `MonitoringPlan.register`:
+
+| Key | Meaning |
+|---|---|
+| `nudge.monitoring.lastDay` | Local calendar day (`yyyy-MM-dd`) of the last successful `startMonitoring` |
+| `nudge.monitoring.lastSignature` | Order-independent fingerprint of the monitored `GoalSummary` set |
+
+Three independent paths re-arm, all bounded by those stamps so none can loop:
+
+| Path | Runs when | Guard |
+|---|---|---|
+| Extension `intervalDidStart` | Midnight — **primary path; needs no app open** | `isRegistrationStale` |
+| Extension `eventDidReachThreshold` | A trigger fires on a stale day | `isRegistrationStale` |
+| App `refreshMonitoring` | Every foreground | `shouldRegister` (stamps **+** lapsed activities) |
+
+The extension deliberately does *not* consult `DeviceActivityCenter.activities`: an
+unreliable reading there would make it re-register on every callback forever. Restart
+recovery is the app's job.
+
+**Never re-register from data that failed to load (ADR-055).** `onForeground` re-registers
+only when both the profile and goal fetches succeed. A failed fetch collapsing into an
+empty goal list would register zero events and overwrite the App Group goal set — silently
+disarming every trigger.
+
+**Rule for future changes:** anything that decides *what* is monitored belongs in
+`Shared/MonitoringPlan.swift`, which is compiled into both the app and the extension
+(ADR-056). Do not re-declare it in either target.
+
 ### Nudge Trigger Flow (real-time)
 ```
 User opens Instagram and uses it for 30 minutes
@@ -67,9 +102,11 @@ DeviceActivityMonitor.eventDidReachThreshold fires
 Extension reads GoalSummary + friend list + secrets from App Group
 Extension builds message: "Joshua just hit his 30-minute limit on Instagram."
 Extension posts local notification
-Extension attempts Strategy 1: background URLSession → send-nudge Edge Function
-    (if Strategy 1 fails on device) → writes PendingTrigger to App Group,
-                                       schedules BGProcessingTask
+Extension writes PendingTrigger to App Group and schedules a BGProcessingTask
+    (Strategy 1 — background URLSession from the extension — was validated
+     non-functional on device 2026-09-06; see ADR-034)
+    ↓
+Main app drains the queue on foreground or via the nudge-trigger BGProcessingTask
     ↓
 send-nudge Edge Function validates friend consent + rate limit
     ↓
