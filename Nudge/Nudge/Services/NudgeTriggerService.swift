@@ -19,11 +19,7 @@ final class AppGroupPendingTriggerStore: PendingTriggerStore {
     }
 
     func load() -> [PendingTrigger] {
-        guard let data = defaults?.data(forKey: AppGroupKeys.triggersPending),
-              let triggers = try? JSONDecoder().decode([PendingTrigger].self, from: data) else {
-            return []
-        }
-        return triggers
+        MonitoringPlan.loadPendingTriggers(from: defaults)
     }
 
     func save(_ triggers: [PendingTrigger]) {

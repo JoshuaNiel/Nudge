@@ -127,6 +127,11 @@
 			path = Nudge;
 			sourceTree = "<group>";
 		};
+		CA9900012F9000010060C731 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -177,6 +182,7 @@
 			isa = PBXGroup;
 			children = (
 				CAB705732F85E0E200940263 /* Config.xcconfig */,
+				CA9900012F9000010060C731 /* Shared */,
 				CA696BC82F849E990060C731 /* Nudge */,
 				CA6204672F8DB35E007AEB05 /* NudgeTests */,
 				CA6204902F8F5F64007AEB05 /* NudgeActivityMonitor */,
@@ -237,6 +243,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				CA6204902F8F5F64007AEB05 /* NudgeActivityMonitor */,
+				CA9900012F9000010060C731 /* Shared */,
 			);
 			name = NudgeActivityMonitor;
 			packageProductDependencies = (
@@ -285,6 +292,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				CA696BC82F849E990060C731 /* Nudge */,
+				CA9900012F9000010060C731 /* Shared */,
 			);
 			name = Nudge;
 			packageProductDependencies = (

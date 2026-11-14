@@ -2,6 +2,10 @@ import Foundation
 
 /// All App Group UserDefaults keys and the shared suite name.
 /// Both the main app target and extension targets must enroll in `suiteName`.
+///
+/// Compiled into both the `Nudge` app target and the `NudgeActivityMonitor`
+/// extension target (see the `Shared/` synchronized folder), so the two sides
+/// cannot drift apart.
 enum AppGroupKeys {
 
     static let suiteName = "group.com.joshuaqn.Nudge"
@@ -24,11 +28,15 @@ enum AppGroupKeys {
     // MARK: - Triggers (Strategy 2 fallback: monitor extension → main app)
     static let triggersPending = "nudge.triggers.pending"
 
-    // MARK: - Monitoring config snapshot (main app — used to detect changes)
-    /// The session_timeout_minutes value that was in effect during the last
-    /// successful startMonitoring call. Compared on every foreground so that
-    /// profile changes cause a fresh registration without requiring a device restart.
-    static let lastRegisteredTimeout = "nudge.monitoring.lastTimeout"
+    // MARK: - Monitoring registration stamps (written by MonitoringPlan.register)
+    /// Local calendar day ("yyyy-MM-dd") of the last successful startMonitoring call.
+    /// DeviceActivityEvent thresholds do not reliably re-arm across a repeating
+    /// daily interval, so a change of day forces a fresh registration (ADR-054).
+    static let lastRegisteredDay = "nudge.monitoring.lastDay"
+
+    /// Signature of the GoalSummary set used for the last successful startMonitoring
+    /// call. A change means the user's goals or session timeout were edited.
+    static let lastRegisteredSignature = "nudge.monitoring.lastSignature"
 
     // MARK: - Sync flags
     /// Set by DeviceActivityMonitor.intervalDidEnd; cleared by main app on next foreground.

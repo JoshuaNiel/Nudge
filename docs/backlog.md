@@ -44,7 +44,7 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 
 - **True continuous-session detection** — The current `session.timeout` event fires when accumulated daily total usage hits the threshold, not when continuous unbroken usage hits the threshold. True "45 minutes straight" detection requires tracking screen-lock/unlock events or using multiple short schedules. Explore using `DeviceActivitySchedule.warningTime` or multiple overlapping schedules in a future iteration.
 
-- **Extension shared types** — `GoalSummary`, `FriendSummary`, message formatting logic, and App Group key constants are duplicated between the main app and `NudgeMonitor/MonitorExtension.swift`. Should be moved to a shared Swift framework target when the extension targets are created.
+- ~~**Extension shared types**~~ — Done 2026-09-07. `Shared/` is now a synchronized folder compiled into both the app and `NudgeActivityMonitor` (ADR-056); the extension's private duplicates are gone.
 
 - **App display names in usage data** — The `DeviceActivityReport` extension currently derives app names as the last component of the bundle ID (e.g. "Instagram" from "com.instagram.Instagram"). Consider building a lookup table of known app names or querying the App Store API for better names in Phase 2.
 
@@ -66,6 +66,12 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 - **Re-enable `send-nudge` gateway `verify_jwt` once Supabase fixes ES256 support.** `send-nudge` is deployed with `--no-verify-jwt` because the Edge Functions gateway currently can't verify asymmetric (ES256) user tokens — a known Supabase platform bug (supabase/supabase #44530, #42244) where the gateway hard-expects legacy HS256. Auth is enforced in-function via `getUser()` + friend-ownership (secure; matches ADR-031/receive-reply and Supabase's own recommendation). When Supabase ships gateway ES256 verification, redeploy `send-nudge` with `verify_jwt` on to restore defense-in-depth.
 
 ## Known Bugs / Tech Debt
+
+- **`goalDidChange` has no caller.** `MonitoringRegistrationService.goalDidChange` (debounced re-registration, ADR-035) is never invoked by the Goals UI, so editing a goal only takes effect on the next app foreground, via the signature check in `refreshMonitoring`. Wire it into `GoalsViewModel` after create/edit/delete. Note the ADR says 1.5 s but the implementation debounces 10 s — pick one.
+
+- **Device restart still needs one app open.** If a reboot clears `DeviceActivityCenter.activities`, the monitor extension gets no callbacks and cannot re-arm itself, so recovery waits for the next foreground (`refreshMonitoring`'s `isMonitoringActive` check). Unverified whether iOS actually drops registrations across a reboot — worth testing on device.
+
+- **Extension `BGTaskScheduler.submit` was never permitted.** `BGTaskSchedulerPermittedIdentifiers` was only in the main app's Info.plist, so the monitor extension's best-effort "wake the app sooner" submit almost certainly threw. The key was added to `NudgeActivityMonitor/Info.plist` on 2026-09-07 — confirm on device whether the submit now succeeds, and drop the call if it still does not.
 
 - **Settings Save bar rides up with the keyboard.** The pinned Save button (`SettingsView.saveBar` via `.safeAreaInset(edge: .bottom)`) moves up above the keyboard when a field is focused. Desired behavior: pin it like the tab bar — stays at the physical bottom (keyboard covers it) while the Form still scrolls the focused field into view. A ZStack + `.ignoresSafeArea(.keyboard)` on the bar was attempted but didn't pin reliably and added layout churn (NaN/List-margin warnings), so it was reverted. Options to try: `.toolbar(placement: .bottomBar)`, a `UIViewRepresentable`/keyboard-height observer to offset manually, or a custom `safeAreaInset` that measures keyboard height. Needs device iteration.
 
