@@ -8,7 +8,7 @@
 // 3. NSExtensionPrincipalClass = $(PRODUCT_MODULE_NAME).NudgeMonitor
 //
 // SHARED TYPES:
-// GoalSummary, PendingTrigger, AppGroupKeys, NudgeMessages, MonitoringPlan,
+// GoalSummary, PendingTrigger, AppGroupKeys, NudgeMessages, MonitoringPlan, NudgeTriggerSettings,
 // GoalProgressStore and ThresholdRouter all come from the `Shared/` folder, which is
 // compiled into this target as well as the main app. Do not re-declare them here — a
 // private copy that drifts from the app's version silently disarms monitoring.
@@ -100,9 +100,13 @@ class NudgeMonitor: DeviceActivityMonitor {
         queueNudge(eventName: eventName, report: report)
     }
 
-    /// Phase 5E seam: becomes the user's "goal-breach nudges" toggle (read from the App
-    /// Group). Until 5E lands every goal breach is nudged, matching earlier behaviour.
-    private var shouldSendGoalBreachNudge: Bool { true }
+    /// The user's "Goal limit reached" toggle (Phase 5E), mirrored to the App Group by the
+    /// app. Missing or undecodable settings read as **off** — the DB default, and the safe
+    /// side: a wrong "on" texts the user's friends without consent, a wrong "off" only
+    /// skips a nudge. The local "limit reached" notification above fires either way.
+    private var shouldSendGoalBreachNudge: Bool {
+        NudgeTriggerSettings.load(from: defaults).goalBreachEnabled
+    }
 
     private func handleSessionTimeout(session: GoalSummary, eventName: String) {
         let userName = defaults?.string(forKey: AppGroupKeys.userFirstName) ?? "Your friend"

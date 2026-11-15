@@ -126,6 +126,19 @@ struct SettingsViewModelTests {
 
     private let userId = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
 
+    /// Profile-focused tests: the nudge-settings, friends and monitoring collaborators are
+    /// inert stubs (see NudgeSettingsTests for their behaviour).
+    private func makeViewModel(_ profileService: MockProfileService) -> SettingsViewModel {
+        let suite = "test.settings.\(UUID().uuidString)"
+        return SettingsViewModel(
+            profileService: profileService,
+            nudgeSettingsService: InertNudgeSettingsService(),
+            friendService: InertFriendService(),
+            monitoringService: InertMonitoringService(),
+            defaults: UserDefaults(suiteName: suite)
+        )
+    }
+
     private func makeProfile(
         firstName: String? = "Grace",
         lastName: String? = "Hopper",
@@ -144,7 +157,7 @@ struct SettingsViewModelTests {
     @Test func loadPopulatesFields() async {
         let mock = MockProfileService()
         mock.profileToReturn = makeProfile()
-        let vm = SettingsViewModel(profileService: mock)
+        let vm = makeViewModel(mock)
 
         await vm.load(userId: userId, email: "grace@example.com")
 
@@ -157,7 +170,7 @@ struct SettingsViewModelTests {
     @Test func loadMapsNilToEmptyString() async {
         let mock = MockProfileService()
         mock.profileToReturn = makeProfile(firstName: nil, lastName: nil, phoneNumber: nil)
-        let vm = SettingsViewModel(profileService: mock)
+        let vm = makeViewModel(mock)
 
         await vm.load(userId: userId, email: "x@example.com")
 
@@ -168,7 +181,7 @@ struct SettingsViewModelTests {
 
     @Test func saveWithValidPhoneCallsServiceAndSetsDidSave() async {
         let mock = MockProfileService()
-        let vm = SettingsViewModel(profileService: mock)
+        let vm = makeViewModel(mock)
         vm.firstName = "Grace"
         vm.lastName = "Hopper"
         vm.phoneNumber = "  +18015551234  "
@@ -186,7 +199,7 @@ struct SettingsViewModelTests {
 
     @Test func saveWithEmptyPhonePassesNil() async {
         let mock = MockProfileService()
-        let vm = SettingsViewModel(profileService: mock)
+        let vm = makeViewModel(mock)
         vm.firstName = "Grace"
         vm.lastName = "Hopper"
         vm.phoneNumber = "   "
@@ -200,7 +213,7 @@ struct SettingsViewModelTests {
 
     @Test func saveWithInvalidPhoneSkipsServiceAndSetsError() async {
         let mock = MockProfileService()
-        let vm = SettingsViewModel(profileService: mock)
+        let vm = makeViewModel(mock)
         vm.firstName = "Grace"
         vm.lastName = "Hopper"
         vm.phoneNumber = "8015551234"
@@ -219,7 +232,7 @@ struct SettingsViewModelTests {
         struct GenericError: Error {}
         let mock = MockProfileService()
         mock.errorToThrow = GenericError()
-        let vm = SettingsViewModel(profileService: mock)
+        let vm = makeViewModel(mock)
         vm.firstName = "Grace"
         vm.lastName = "Hopper"
         vm.phoneNumber = "+18015551234"
@@ -236,7 +249,7 @@ struct SettingsViewModelTests {
     @Test func noChangesAfterLoad() async {
         let mock = MockProfileService()
         mock.profileToReturn = makeProfile()
-        let vm = SettingsViewModel(profileService: mock)
+        let vm = makeViewModel(mock)
 
         await vm.load(userId: userId, email: "grace@example.com")
 
@@ -247,7 +260,7 @@ struct SettingsViewModelTests {
     @Test func editingFieldFlipsHasChanges() async {
         let mock = MockProfileService()
         mock.profileToReturn = makeProfile()
-        let vm = SettingsViewModel(profileService: mock)
+        let vm = makeViewModel(mock)
 
         await vm.load(userId: userId, email: "grace@example.com")
         vm.firstName = "Ada"
@@ -259,7 +272,7 @@ struct SettingsViewModelTests {
     @Test func emptyFirstNameBlocksSave() async {
         let mock = MockProfileService()
         mock.profileToReturn = makeProfile()
-        let vm = SettingsViewModel(profileService: mock)
+        let vm = makeViewModel(mock)
 
         await vm.load(userId: userId, email: "grace@example.com")
         vm.firstName = "   "
@@ -274,7 +287,7 @@ struct SettingsViewModelTests {
     @Test func emptyLastNameBlocksSave() async {
         let mock = MockProfileService()
         mock.profileToReturn = makeProfile()
-        let vm = SettingsViewModel(profileService: mock)
+        let vm = makeViewModel(mock)
 
         await vm.load(userId: userId, email: "grace@example.com")
         vm.lastName = ""
@@ -286,7 +299,7 @@ struct SettingsViewModelTests {
     @Test func invalidPhoneBlocksSave() async {
         let mock = MockProfileService()
         mock.profileToReturn = makeProfile()
-        let vm = SettingsViewModel(profileService: mock)
+        let vm = makeViewModel(mock)
 
         await vm.load(userId: userId, email: "grace@example.com")
         vm.phoneNumber = "8015551234"
@@ -298,7 +311,7 @@ struct SettingsViewModelTests {
     @Test func successfulSaveClearsChangesAndSetsDidSave() async {
         let mock = MockProfileService()
         mock.profileToReturn = makeProfile()
-        let vm = SettingsViewModel(profileService: mock)
+        let vm = makeViewModel(mock)
 
         await vm.load(userId: userId, email: "grace@example.com")
         vm.firstName = "Ada"
@@ -342,4 +355,21 @@ private final class MockProfileService: ProfileServiceProtocol {
         savedPhoneNumber = phoneNumber
         if let errorToThrow { throw errorToThrow }
     }
+}
+
+private final class InertNudgeSettingsService: NudgeSettingsServiceProtocol {
+    func fetch(userId: UUID) async throws -> NudgeSettings { .defaults }
+    func save(_ settings: NudgeSettings, userId: UUID) async throws {}
+}
+
+private final class InertFriendService: FriendServiceProtocol {
+    func fetchFriends(userId: UUID) async throws -> [Friend] { [] }
+    func addFriend(userId: UUID, name: String, phoneNumber: String) async throws {}
+    func deleteFriend(id: Int) async throws {}
+    func updateFriendName(id: Int, name: String) async throws {}
+    func fetchNudgeHistory(friendId: Int) async throws -> [Nudge] { [] }
+}
+
+private final class InertMonitoringService: MonitoringRegistrationServiceProtocol {
+    func goalDidChange() {}
 }

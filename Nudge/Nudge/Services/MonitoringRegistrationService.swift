@@ -19,35 +19,45 @@ protocol MonitoringInputsLoading {
     func loadMonitoringInputs() async throws -> MonitoringInputs
 }
 
-/// Production loader: the signed-in user's goals + `profile.session_timeout_minutes`.
+/// Production loader: the signed-in user's goals + their `nudge_settings` session timeout
+/// (Phase 5E — `profile.session_timeout_minutes` is deprecated and no longer read).
+///
+/// A failed settings fetch fails the whole load. It is never replaced by
+/// `NudgeSettings.defaults`, which would re-register with a session timeout the user may
+/// have turned off (ADR-055). A user with *no row* gets the defaults, by design.
 @MainActor
 final class SupabaseMonitoringInputsLoader: MonitoringInputsLoading {
 
     enum LoadError: Error { case notSignedIn }
 
     private let goalService: GoalServiceProtocol
+    private let settingsService: NudgeSettingsServiceProtocol
+    private let currentUserId: () -> UUID?
 
-    init() { self.goalService = GoalService() }
-    init(goalService: GoalServiceProtocol) { self.goalService = goalService }
+    // Production init (ADR-028 two-init pattern).
+    init() {
+        self.goalService = GoalService()
+        self.settingsService = NudgeSettingsService()
+        self.currentUserId = { supabase.auth.currentUser?.id }
+    }
+
+    init(
+        goalService: GoalServiceProtocol,
+        settingsService: NudgeSettingsServiceProtocol,
+        currentUserId: @escaping () -> UUID?
+    ) {
+        self.goalService = goalService
+        self.settingsService = settingsService
+        self.currentUserId = currentUserId
+    }
 
     func loadMonitoringInputs() async throws -> MonitoringInputs {
-        guard let userId = supabase.auth.currentUser?.id else { throw LoadError.notSignedIn }
+        guard let userId = currentUserId() else { throw LoadError.notSignedIn }
 
-        struct ProfileRow: Decodable {
-            let sessionTimeoutMinutes: Int?
-            enum CodingKeys: String, CodingKey { case sessionTimeoutMinutes = "session_timeout_minutes" }
-        }
-
-        let profile: ProfileRow = try await supabase
-            .from("profile")
-            .select("session_timeout_minutes")
-            .eq("user_id", value: userId)
-            .single()
-            .execute()
-            .value
+        let settings = try await settingsService.fetch(userId: userId)
         let goals = try await goalService.fetchGoalSummaries(userId: userId)
 
-        return MonitoringInputs(goals: goals, sessionTimeoutMinutes: profile.sessionTimeoutMinutes)
+        return MonitoringInputs(goals: goals, sessionTimeoutMinutes: settings.effectiveSessionTimeoutMinutes)
     }
 }
 
@@ -177,7 +187,8 @@ final class MonitoringRegistrationService: MonitoringRegistrationServiceProtocol
         }
     }
 
-    /// Call after any successful goal or category create/edit/delete. Debounced 1.5 s
+    /// Call after any successful goal or category create/edit/delete, or nudge-settings
+    /// save (Phase 5E — a session-timeout change re-arms through here). Debounced 1.5 s
     /// (ADR-035): each call restarts the timer, and only the last one fetches fresh goals
     /// + session timeout and refreshes monitoring. A failed fetch leaves the existing
     /// registration untouched (ADR-055); the next foreground retries.
