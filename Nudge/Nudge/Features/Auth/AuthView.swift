@@ -3,6 +3,8 @@ import AuthenticationServices
 
 struct AuthView: View {
     var onAuthenticated: () -> Void
+    /// Opens the reset-password sheet, pre-filled with whatever email is typed.
+    var onForgotPassword: (String) -> Void
 
     @EnvironmentObject private var appState: AppState
 
@@ -12,6 +14,8 @@ struct AuthView: View {
     @State private var confirmPassword = ""
     @State private var isLoading = false
     @State private var errorMessage: String? = nil
+    /// Set after sign-up when Supabase requires email confirmation before a session exists.
+    @State private var confirmationSentTo: String? = nil
 
     private enum Mode { case signIn, signUp }
 
@@ -46,8 +50,24 @@ struct AuthView: View {
                             .textContentType(.newPassword)
                             .textFieldStyle(.roundedBorder)
                     }
+
+                    if mode == .signIn {
+                        Button("Forgot password?", action: forgotPassword)
+                            .font(.footnote)
+                            .foregroundStyle(Color.accentColor)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
                 }
                 .padding(.horizontal, 24)
+
+                // Awaiting email confirmation
+                if let confirmationSentTo {
+                    Text("Check \(confirmationSentTo) for a link to confirm your account. Open it on this iPhone to continue.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                }
 
                 // Error
                 if let errorMessage {
@@ -113,12 +133,12 @@ struct AuthView: View {
 }
 
 #Preview("Sign In") {
-    AuthView(onAuthenticated: {})
+    AuthView(onAuthenticated: {}, onForgotPassword: { _ in })
         .environmentObject(AppState())
 }
 
 #Preview("Sign Up") {
-    AuthView(onAuthenticated: {})
+    AuthView(onAuthenticated: {}, onForgotPassword: { _ in })
         .environmentObject(AppState())
 }
 
@@ -127,6 +147,7 @@ extension AuthView {
 
     private func submitEmailPassword() {
         errorMessage = nil
+        confirmationSentTo = nil
         guard validate() else { return }
         isLoading = true
         Task {
@@ -135,7 +156,13 @@ extension AuthView {
                 if mode == .signIn {
                     try await appState.authService.signIn(email: email, password: password)
                 } else {
-                    try await appState.authService.signUp(email: email, password: password)
+                    let needsConfirmation = try await appState.authService.signUp(email: email, password: password)
+                    if needsConfirmation {
+                        // No session yet. The nudge://auth-callback link signs the
+                        // user in; OnboardingCoordinator advances when it does.
+                        confirmationSentTo = email
+                        return
+                    }
                 }
                 onAuthenticated()
             } catch {
@@ -187,10 +214,15 @@ extension AuthView {
 
     // MARK: - Helpers
 
+    private func forgotPassword() {
+        onForgotPassword(email.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     private func toggleMode() {
         withAnimation {
             mode = mode == .signIn ? .signUp : .signIn
             errorMessage = nil
+            confirmationSentTo = nil
             password = ""
             confirmPassword = ""
         }

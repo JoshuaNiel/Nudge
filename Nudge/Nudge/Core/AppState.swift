@@ -52,12 +52,16 @@ class AppState: ObservableObject {
                 if let session {
                     await onSignedIn(session: session)
                 }
-            case .tokenRefreshed:
+            case .tokenRefreshed, .passwordRecovery:
+                // `.passwordRecovery` carries a valid session (it follows `.signedIn`
+                // in the implicit flow; the PKCE flow never emits it). It must not
+                // be treated as a sign-out. Recovery UI is driven by the deep-link
+                // route in AuthRecoveryCoordinator, not by this event.
                 currentUser = session?.user
                 if let session {
                     writeSecretsToAppGroup(session: session)
                 }
-            case .signedOut, .passwordRecovery, .userDeleted:
+            case .signedOut, .userDeleted:
                 currentUser = nil
                 isAuthenticated = false
                 userFirstName = ""

@@ -8,6 +8,8 @@ internal import Auth
 struct NudgeApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
+    /// App-level so its sheets sit above RootView and survive its auth-driven branch switches.
+    @StateObject private var authRecovery = AuthRecoveryCoordinator()
     @Environment(\.scenePhase) private var scenePhase
 
     // Set when onForeground bails because currentUser was nil (cold start auth race).
@@ -32,6 +34,24 @@ struct NudgeApp: App {
                     appDelegate.setDeviceTokenHandler { [appState] token in
                         Task { await appState.pushTokens.didReceiveDeviceToken(token) }
                     }
+                }
+                .environmentObject(authRecovery)
+                .sheet(item: $authRecovery.activeSheet, onDismiss: authRecovery.sheetDidDismiss) { sheet in
+                    switch sheet {
+                    case .forgotPassword(let prefillEmail):
+                        ForgotPasswordView(prefillEmail: prefillEmail, onClose: authRecovery.dismissSheet)
+                    case .setNewPassword:
+                        SetNewPasswordView(onFinished: authRecovery.dismissSheet)
+                    }
+                }
+                .alert("Link Expired", isPresented: $authRecovery.isShowingExpiredLinkAlert) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(AuthRecoveryCoordinator.expiredLinkMessage)
+                }
+                // Password-reset and email-confirmation links (nudge://…).
+                .onOpenURL { url in
+                    Task { await authRecovery.handleOpenURL(url) }
                 }
         }
         .onChange(of: scenePhase) { _, newPhase in
