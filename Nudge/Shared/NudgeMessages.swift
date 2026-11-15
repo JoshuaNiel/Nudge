@@ -29,24 +29,22 @@ enum NudgeMessages {
         "\(userName) has been on their phone for \(minutes) minutes."
     }
 
-    // MARK: - Daily report (sent at midnight intervalDidEnd)
+    // MARK: - Daily report (Phase 5E-2: total only, approximate)
 
-    /// `totalSeconds` is the day's total. `topApps` is already sorted descending;
-    /// only the first 3 are used (ADR-041).
-    static func dailyReport(
-        userName: String,
-        totalSeconds: Int,
-        topApps: [(name: String, seconds: Int)]
-    ) -> String {
-        let totalStr = totalSeconds.formattedDuration
-        let appLines = topApps.prefix(3)
-            .map { "\($0.name) (\($0.seconds.formattedDuration))" }
-            .joined(separator: ", ")
-
-        if appLines.isEmpty {
-            return "\(userName)'s screen time yesterday: \(totalStr)."
+    /// Yesterday's total, from the highest `total.m<NN>` milestone reached, so it is
+    /// accurate to the 15-minute step — hence "about". Reaching the 12 h milestone reads
+    /// "over 12 hours". Below the first milestone reads "under 15 minutes", although the
+    /// enqueue path never sends a report with nothing recorded.
+    static func dailyReport(userName: String, totalMinutes: Int) -> String {
+        let amount: String
+        if totalMinutes >= MonitoringPlan.dailyTotalMaxMinutes {
+            amount = "over \(MonitoringPlan.dailyTotalMaxMinutes / 60) hours"
+        } else if totalMinutes < MonitoringPlan.dailyTotalStepMinutes {
+            amount = "under \(MonitoringPlan.dailyTotalStepMinutes) minutes"
+        } else {
+            amount = "about \((totalMinutes * 60).formattedDuration)"
         }
-        return "\(userName)'s screen time yesterday: \(totalStr). Top apps: \(appLines)."
+        return "\(userName)'s screen time yesterday: \(amount)."
     }
 
     // MARK: - Limit reached (local notification on the user's own device)

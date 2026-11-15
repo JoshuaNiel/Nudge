@@ -144,7 +144,9 @@ final class MonitoringRegistrationService: MonitoringRegistrationServiceProtocol
     /// Foreground / goal-change entry point. Always refreshes the App Group catalog from
     /// the freshly fetched data, then re-registers only when something makes the current
     /// registration stale: monitoring lapsed, the calendar day rolled over, or today's
-    /// active set changed. Returns whether a registration actually happened.
+    /// active set or the daily-report toggle changed. Returns whether a registration
+    /// actually happened. The toggle is read from the App Group settings, which callers
+    /// write before getting here (`fetchAndCacheNudgeSettings`, Settings save).
     ///
     /// Persisting the catalog even when no registration is needed keeps the extension's
     /// midnight re-arm current (e.g. a temporary goal that starts tomorrow) without
@@ -161,8 +163,10 @@ final class MonitoringRegistrationService: MonitoringRegistrationServiceProtocol
         MonitoringPlan.persistCatalog(catalog, defaults: defaults)
 
         let today = MonitoringPlan.dayStamp(for: now, calendar: calendar)
-        let signature = MonitoringPlan.signature(
-            for: MonitoringPlan.activeSummaries(in: catalog, now: now, calendar: calendar)
+        // Includes the daily-report toggle from the App Group settings (Phase 5E-2) —
+        // the same source the extension's re-arm uses, so the two always agree.
+        let signature = MonitoringPlan.registrationSignature(
+            catalog: catalog, defaults: defaults, now: now, calendar: calendar
         )
         let lastDay = defaults?.string(forKey: AppGroupKeys.lastRegisteredDay)
 

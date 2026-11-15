@@ -49,8 +49,9 @@ only runs while the app is drawing it on screen. So the report is **total screen
   earliest queued `notBefore`. **Delivery is at or after the chosen time**, when iOS next
   runs the app (foreground or background task). The Settings footer says so.
 - Copy (`NudgeMessages.dailyReport`, which loses its `topApps` parameter):
-  `"Josh's screen time yesterday: about 3h 15m."`. Under 15 min → `"under 15 minutes"`.
-  12 h milestone hit → `"over 12 hours"`.
+  `"Josh's screen time yesterday: about 3h 15m."`. 12 h milestone hit → `"over 12 hours"`.
+  (The function returns `"under 15 minutes"` below the first milestone, but that is never
+  sent: nothing recorded → no report, below.)
 - If nothing was recorded for yesterday (device off, or the report enabled mid-day) → no report is sent.
 - `_shared/messages.ts` and `send-nudge` need no change, since the report text is built on iOS.
 
@@ -67,7 +68,7 @@ only runs while the app is drawing it on screen. So the report is **total screen
 - [ ] Toggles persist across launches and devices (server-side), and defaults apply with no row. *(5E-1: implemented + unit-tested; device check pending)*
 - [ ] Session timeout off → no `session.timeout` event registered. *(5E-1: implemented + unit-tested; device check pending)*
 - [ ] Goal breach off → no nudge on p100, but the local notification still shows. *(5E-1: implemented; device check pending)*
-- [ ] Daily report sends yesterday's approximate total once, at or after the chosen time.
+- [ ] Daily report sends yesterday's approximate total once, at or after the chosen time. *(5E-2: implemented + unit-tested; device check pending)*
 - [ ] Tests: settings coding (time parsing), backfill snapping function (if done in Swift
       it's tested; otherwise SQL reviewed), total-milestone events, dailyTotal recording,
       `notBefore` drain filtering, copy edge cases.
@@ -116,6 +117,78 @@ only runs while the app is drawing it on screen. So the report is **total screen
 - [x] App Group `nudge.settings`; extension goal-breach gate (fail closed)
 - [x] Settings "Nudges" section on the shared Save bar
 - [x] Tests (`NudgeSettingsTests.swift`)
+- [ ] On-device verification
+
+## 5E-2 implementation notes (decisions made while implementing)
+- **Events.** `total.m<NN>`, NN = 15, 30 … 720 (48 events), no zero padding, no app filter,
+  threshold = NN minutes. Built and parsed in `Shared/MonitoringEvents.swift`
+  (`MonitoredEvent.dailyTotal(minutes:)`); parsing is canonical-only (`total.m015`,
+  `total.m+15`, `total.m14`, `total.m735`, legacy `total` → `.unknown`).
+- **Report toggle in the registration.** `MonitoringPlan.register` reads
+  `daily_report_enabled` from the App Group `nudge.settings` itself
+  (`isDailyReportEnabled`), and every staleness check (app `refreshMonitoring`, extension
+  re-arm) uses the same `registrationSignature(catalog:defaults:now:calendar:)`. One
+  source for both sides means the app and the extension can never compute different
+  signatures and re-register each other in turn. Missing settings → off (fail closed).
+- **Signature.** `registrationSignature` = the goal signature, plus
+  `;total.m15|15|720` when the report is on. Toggling re-registers; changing only the time
+  does not. With the report off it is byte-identical to the 3a signature, so upgrading
+  does not re-register.
+- **Extension re-arm with no goals.** An empty catalog no longer skips the re-arm when the
+  report is on (the report needs no goals).
+- **Event count.** Worst case per registration = goals × 10 + 48 + 1. The existing
+  `eventCountWarningThreshold` (200) now counts the report events too (warning logged from
+  `registrationEvents`), so it is first logged at 16 goals + session + report (209).
+- **Recording.** `ThresholdRouter` routes `total.m<NN>` to `.dailyTotal(minutes:)` with no
+  catalog lookup and max-merges into `nudge.dailyTotal.<day>` (`Int` minutes,
+  `GoalProgressStore.recordDailyTotal`). The fired set is not used: max-merge is
+  idempotent and there is no side effect to dedup. No notification, no nudge.
+- **Prune.** `GoalProgressStore.prune` now covers every prefix in
+  `AppGroupKeys.dayScopedKeyPrefixes` (progress, fired, dailyTotal, dailyReport.enqueued)
+  and still keeps today + the two previous days, so yesterday survives the midnight prune.
+- **Midnight enqueue** (`Shared/DailyReport.swift`). In `intervalDidStart`, after prune
+  and before re-registration: report on + a recorded value > 0 for yesterday + no
+  `nudge.dailyReport.enqueued.<yesterday>` → mark it (test-and-set), then append
+  `PendingTrigger(eventName: "daily.report", report:, notBefore: today at the report
+  time)` and schedule the BG task. Marking first means a crash in between loses one
+  report rather than texting twice. The second `intervalDidStart` that re-registration
+  provokes finds the marker and does nothing. A mid-day `intervalDidStart` (an app
+  registration after a missed midnight) catches up on a report that was never queued;
+  if the time has already passed it is due at once.
+- **`notBefore`.** `TimeOfDay.date(on: now)`. On a spring-forward day a missing time
+  (02:30) resolves to the next valid time that day (03:00); other times use that day's
+  offset. A report time change applies from the next report; an already-queued report
+  keeps the time it was queued with.
+- **`PendingTrigger.notBefore: Date?`** (`not_before`, synthesized `decodeIfPresent`), so
+  queues written by older builds decode. `PendingTrigger` is now `Equatable`.
+- **Queue helpers** moved to `Shared/PendingTriggerQueue.swift` (`load`/`save`/`append`,
+  pure `partition` and `earliestBeginDate`); `MonitoringPlan.loadPendingTriggers` is gone.
+- **Drain.** `partition` splits the queue into due (`notBefore` nil or passed), deferred
+  (kept untouched) and dropped. A `daily.report` is **dropped** when the App Group setting
+  now has the report off (turning the report off withdraws already-queued reports), or
+  when it has **expired**: at the end of the local day it was due its "yesterday" names the
+  wrong day. Dropped entries are removed before any network call. Only-deferred queues
+  make no network calls. Existing semantics kept for due triggers: friend fetch failure
+  retains them; no accepted friends clears them (deferred ones stay); a send failure
+  retains the trigger. Removal is read-modify-write by (eventName, timestamp).
+- **BG scheduling.** `earliestBeginDate` = the earliest future `notBefore` when nothing in
+  the queue is due, else `nil` (a due trigger never waits behind a later one). Used by the
+  app (going to background, and now also after the BG-task drain so a leftover deferred
+  report sets the next run) and by the extension.
+- **Copy.** `NudgeMessages.dailyReport(userName:totalMinutes:)`; the `topApps` parameter and
+  its tests are gone. `send-nudge` needs no change: it uses `report` verbatim, appends
+  `REPLY_OPTIONS` itself, and does not read `event_name` (the app never sends it).
+- **Known limits.** Accuracy is the 15-min step. Delivery depends on iOS running the BG task
+  or the user opening the app on the day the report is due; a late report time (e.g. 23:30)
+  leaves a short window before expiry.
+
+### 5E-2 checklist
+- [x] `total.m<NN>` events, parsing, registration + signature from the App Group toggle
+- [x] dailyTotal recording (max-merge) + prune keeps yesterday
+- [x] Midnight enqueue with idempotency marker
+- [x] `PendingTrigger.notBefore`, drain filtering, disabled/expired drop, `earliestBeginDate`
+- [x] Copy without `topApps`
+- [x] Tests (`DailyReportTests.swift`)
 - [ ] On-device verification
 
 ## PRs

@@ -193,8 +193,9 @@ The main app must refresh `nudge.auth.jwt` in App Group whenever the Supabase se
 |---|---|---|
 | Any goal (app, category, total) | `goal.<goal_id>.p<NN>`, NN = 10, 20 … 100, no zero padding | `goal.42.p50`, `goal.42.p100` |
 | Session timeout | `session.timeout` (unchanged) | `session.timeout` |
+| Daily-report total usage (Phase 5E-2, only while the report is on) | `total.m<NN>`, NN = 15, 30 … 720 minutes, no zero padding, no app filter | `total.m15`, `total.m720` |
 
-`goal.<id>.p100` is "limit reached" (local notification + goal-breach nudge); p10–p90 only record progress. Names are built and parsed in `Shared/MonitoringEvents.swift`; parsing accepts only canonical names (anything else, including the legacy `app.<bundle_id>` / `category.<id>` / `total` names from ADR-036, is "unknown" → "Nudge misconfigured" notification).
+`goal.<id>.p100` is "limit reached" (local notification + goal-breach nudge); p10–p90 only record progress. `total.m<NN>` only records the day's highest total for the daily report (`docs/specs/phase-5e-trigger-settings.md`); the queued report itself uses the trigger name `daily.report`, which is never a DeviceActivity event. Names are built and parsed in `Shared/MonitoringEvents.swift`; parsing accepts only canonical names (anything else, including the legacy `app.<bundle_id>` / `category.<id>` / `total` names from ADR-036, is "unknown" → "Nudge misconfigured" notification).
 
 The session timeout event fires based on the user's configured timeout setting (e.g. "send a nudge if I've been on my phone for 45 minutes"), not a DB goal.
 
@@ -277,12 +278,16 @@ Messages are built inside the monitor extension from `GoalSummary` data (read fr
 | `nudge.fired.<yyyy-MM-dd>` | JSON `[eventName]` — once-per-day dedup (Phase 3 G4) | Monitor extension | Monitor extension |
 | `nudge.friends.accepted` | JSON `[FriendSummary]` | Main app (on login / friend changes) | Monitor extension |
 | `nudge.sync.midnightNeeded` | `Bool` | Monitor extension (`intervalDidEnd`) | Main app (on foreground) |
+| `nudge.settings` | JSON `NudgeTriggerSettings` (Phase 5E) | Main app (settings load / save) | Monitor extension + every registration (daily-report toggle) |
+| `nudge.dailyTotal.<yyyy-MM-dd>` | `Int` minutes — highest `total.m<NN>` reached (Phase 5E-2) | Monitor extension | Monitor extension (midnight enqueue) |
+| `nudge.dailyReport.enqueued.<yyyy-MM-dd>` | `Bool` — report about that day queued (Phase 5E-2) | Monitor extension | Monitor extension |
 
 ```swift
-struct PendingTrigger: Codable {
-    let eventName: String   // e.g. "goal.42.p100", "session.timeout"
+struct PendingTrigger: Codable, Equatable {
+    let eventName: String   // e.g. "goal.42.p100", "session.timeout", "daily.report"
     let report: String
     let timestamp: Date
+    let notBefore: Date?    // Phase 5E-2, "not_before"; nil = send ASAP. Optional, so old queues decode.
 }
 
 // Phase 3a shape — see Shared/MonitoringModels.swift. New fields decode with defaults so

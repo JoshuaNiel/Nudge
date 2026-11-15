@@ -73,6 +73,24 @@ enum AppGroupKeys {
     /// JSON `{"<goalId>.<percent>": nextIndex}` — round-robin position per (goal,
     /// percent). Read and written by the monitor extension only.
     static let remindersRoundRobin = "nudge.reminders.rr"
+
+    // MARK: - Daily report (monitor extension only), Phase 5E-2
+    // Day-scoped like progress/fired, and pruned with them by GoalProgressStore.
+    static let dailyTotalKeyPrefix          = "nudge.dailyTotal."
+    static let dailyReportEnqueuedKeyPrefix = "nudge.dailyReport.enqueued."
+
+    /// `Int` minutes: the highest `total.m<NN>` milestone reached on `day`.
+    static func dailyTotalKey(day: String) -> String { dailyTotalKeyPrefix + day }
+
+    /// `Bool`: the daily report *about* `day` has been queued. Idempotency marker for the
+    /// midnight enqueue, which can run more than once per night (ADR-054).
+    static func dailyReportEnqueuedKey(day: String) -> String { dailyReportEnqueuedKeyPrefix + day }
+
+    /// Every day-scoped key prefix (`<prefix><yyyy-MM-dd>`) that `GoalProgressStore.prune`
+    /// manages.
+    static let dayScopedKeyPrefixes = [
+        progressKeyPrefix, firedKeyPrefix, dailyTotalKeyPrefix, dailyReportEnqueuedKeyPrefix,
+    ]
 }
 
 // MARK: - Background Task Identifiers
