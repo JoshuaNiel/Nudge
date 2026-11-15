@@ -5,15 +5,24 @@ import DeviceActivity
 
 // MARK: - Helpers
 
+/// "session.timeout" builds the session pseudo-goal; anything else builds a daily
+/// total goal with a stable id derived from the name.
 private func goal(_ eventName: String, _ limitSeconds: Int, label: String = "X") -> GoalSummary {
-    GoalSummary(
-        goalId: abs(eventName.hashValue % 1000),
-        eventName: eventName,
+    if eventName == "session.timeout" {
+        return MonitoringPlan.sessionTimeoutSummary(minutes: limitSeconds / 60)
+    }
+    let id = eventName.unicodeScalars.reduce(1) { ($0 * 31 + Int($1.value)) % 100_000 }
+    return GoalSummary(
+        goalId: id,
+        eventName: MonitoringPlan.goalEventBase(goalId: id),
         limitSeconds: limitSeconds,
         targetLabel: label,
-        appBundleId: nil
+        targetType: .total
     )
 }
+
+private let anyDay = utc(2026, 9, 7, 12, 0)
+private let utcCal = calendar("UTC")
 
 private func utc(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Date {
     var c = DateComponents()
@@ -38,7 +47,8 @@ struct MonitoringPlanComposeTests {
     @Test func appendsSessionTimeoutWhenConfigured() {
         let composed = MonitoringPlan.composeSummaries(
             goals: [goal("total", 7200)],
-            sessionTimeoutMinutes: 45
+            sessionTimeoutMinutes: 45,
+            today: anyDay, calendar: utcCal
         )
         #expect(composed.count == 2)
         let session = composed.first { $0.eventName == "session.timeout" }
@@ -47,17 +57,17 @@ struct MonitoringPlanComposeTests {
     }
 
     @Test func omitsSessionTimeoutWhenNil() {
-        let composed = MonitoringPlan.composeSummaries(goals: [goal("total", 7200)], sessionTimeoutMinutes: nil)
-        #expect(composed.map(\.eventName) == ["total"])
+        let composed = MonitoringPlan.composeSummaries(goals: [goal("total", 7200)], sessionTimeoutMinutes: nil, today: anyDay, calendar: utcCal)
+        #expect(composed.map(\.eventName) == [goal("total", 7200).eventName])
     }
 
     @Test func omitsSessionTimeoutWhenZero() {
-        let composed = MonitoringPlan.composeSummaries(goals: [goal("total", 7200)], sessionTimeoutMinutes: 0)
-        #expect(composed.map(\.eventName) == ["total"])
+        let composed = MonitoringPlan.composeSummaries(goals: [goal("total", 7200)], sessionTimeoutMinutes: 0, today: anyDay, calendar: utcCal)
+        #expect(composed.map(\.eventName) == [goal("total", 7200).eventName])
     }
 
     @Test func sessionTimeoutOnlyIsValid() {
-        let composed = MonitoringPlan.composeSummaries(goals: [], sessionTimeoutMinutes: 30)
+        let composed = MonitoringPlan.composeSummaries(goals: [], sessionTimeoutMinutes: 30, today: anyDay, calendar: utcCal)
         #expect(composed.map(\.eventName) == ["session.timeout"])
     }
 }
@@ -133,18 +143,20 @@ struct MonitoringPlanSignatureTests {
 @MainActor
 struct MonitoringPlanEventTests {
 
-    @Test func buildsEventsForTotalAndSessionTimeout() {
-        let events = MonitoringPlan.events(for: [goal("total", 7200), goal("session.timeout", 2700)])
-        #expect(events.count == 2)
-        #expect(events[DeviceActivityEvent.Name("total")] != nil)
+    @Test func buildsMilestonesForTotalAndOneEventForSessionTimeout() {
+        let total = goal("total", 7200)
+        let events = MonitoringPlan.events(for: [total, goal("session.timeout", 2700)])
+        #expect(events.count == 11)
+        #expect(events[DeviceActivityEvent.Name("\(total.eventName).p100")] != nil)
         #expect(events[DeviceActivityEvent.Name("session.timeout")] != nil)
     }
 
-    /// App and category goals need an ApplicationToken from FamilyActivityPicker (ADR-042).
-    @Test func skipsAppAndCategoryGoals() {
+    /// App and category goals need tokens from FamilyActivityPicker (ADR-042); without a
+    /// decodable selection they are skipped rather than silently monitoring all usage.
+    @Test func skipsAppAndCategoryGoalsWithoutSelection() {
         let events = MonitoringPlan.events(for: [
-            goal("app.com.instagram.Instagram", 1800),
-            goal("category.4", 3600)
+            GoalSummary(goalId: 2, eventName: "goal.2", limitSeconds: 1800, targetLabel: "Instagram", targetType: .app),
+            GoalSummary(goalId: 3, eventName: "goal.3", limitSeconds: 3600, targetLabel: "Social", targetType: .category)
         ])
         #expect(events.isEmpty)
     }
@@ -215,8 +227,8 @@ struct MonitoringPlanRegisterTests {
     }
 
     private let summaries = [
-        GoalSummary(goalId: 1, eventName: "total", limitSeconds: 7200, targetLabel: "All Apps", appBundleId: nil),
-        GoalSummary(goalId: 0, eventName: "session.timeout", limitSeconds: 2700, targetLabel: "Session", appBundleId: nil)
+        GoalSummary(goalId: 1, eventName: "goal.1", limitSeconds: 7200, targetLabel: "All Apps", targetType: .total),
+        MonitoringPlan.sessionTimeoutSummary(minutes: 45)
     ]
 
     /// The recursion guard: restarting monitoring provokes another
@@ -228,7 +240,7 @@ struct MonitoringPlanRegisterTests {
         var stampDuringStart: String?
 
         _ = try MonitoringPlan.register(
-            summaries: summaries,
+            catalog: summaries,
             defaults: defaults,
             now: utc(2026, 9, 8, 12, 0),
             calendar: calendar("UTC")
@@ -244,17 +256,17 @@ struct MonitoringPlanRegisterTests {
         let defaults = freshDefaults(#function)
 
         let count = try MonitoringPlan.register(
-            summaries: summaries,
+            catalog: summaries,
             defaults: defaults,
             now: utc(2026, 9, 8, 12, 0),
             calendar: calendar("UTC")
         ) { _, _ in }
 
-        #expect(count == 2)
+        #expect(count == 11, "10 milestones for the total goal + session.timeout")
         #expect(defaults.string(forKey: AppGroupKeys.lastRegisteredSignature)
                 == MonitoringPlan.signature(for: summaries))
         #expect(MonitoringPlan.loadSummaries(from: defaults).map(\.eventName).sorted()
-                == ["session.timeout", "total"])
+                == ["goal.1", "session.timeout"])
     }
 
     /// A failed registration must not leave a stamp claiming success, or the next
@@ -266,7 +278,7 @@ struct MonitoringPlanRegisterTests {
 
         #expect(throws: Boom.self) {
             _ = try MonitoringPlan.register(
-                summaries: summaries,
+                catalog: summaries,
                 defaults: defaults,
                 now: utc(2026, 9, 8, 12, 0),
                 calendar: calendar("UTC")
@@ -282,7 +294,7 @@ struct MonitoringPlanRegisterTests {
 
         #expect(throws: Boom.self) {
             _ = try MonitoringPlan.register(
-                summaries: summaries,
+                catalog: summaries,
                 defaults: defaults,
                 now: utc(2026, 9, 8, 12, 0),
                 calendar: calendar("UTC")
@@ -301,7 +313,7 @@ struct MonitoringPlanRegisterTests {
         var starts = 0
 
         _ = try MonitoringPlan.register(
-            summaries: summaries, defaults: defaults,
+            catalog: summaries, defaults: defaults,
             now: utc(2026, 9, 7, 9, 0), calendar: cal
         ) { _, _ in starts += 1 }
 

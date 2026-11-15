@@ -58,7 +58,9 @@ struct GoalWithProgressTests {
             categoryId: nil,
             temporary: false,
             startDate: nil,
-            endDate: nil
+            endDate: nil,
+            selection: nil,
+            label: nil
         )
     }
 
@@ -123,8 +125,9 @@ struct GoalCodingTests {
             limitSeconds: 3600,
             frequency: .daily,
             targetType: .total,
-            bundleId: nil,
             categoryId: nil,
+            selection: nil,
+            label: nil,
             temporary: false,
             startDate: nil,
             endDate: nil
@@ -135,7 +138,7 @@ struct GoalCodingTests {
         #expect(json["user_id"] != nil,    "user_id key missing — explicit CodingKeys required")
         #expect(json["limit_seconds"] != nil, "limit_seconds key missing")
         #expect(json["target_type"] != nil, "target_type key missing")
-        #expect(json["bundle_id"] != nil || insert.bundleId == nil)   // nil is encoded as NSNull
+        #expect(json["bundle_id"] == nil, "bundle_id is deprecated (migration 006)")
         #expect(json["category_id"] != nil || insert.categoryId == nil)
         #expect(json["start_date"] != nil || insert.startDate == nil)
         #expect(json["end_date"] != nil || insert.endDate == nil)
