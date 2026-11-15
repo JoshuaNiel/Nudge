@@ -4,6 +4,7 @@ import Supabase
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @StateObject var viewModel = SettingsViewModel()
+    @StateObject private var deletionViewModel = AccountDeletionViewModel()
     @FocusState private var focusedField: Field?
     @FocusState private var phoneFocused: Bool
 
@@ -16,7 +17,10 @@ struct SettingsView: View {
             Form {
                 accountSection
                 profileSection
+                deleteAccountSection
             }
+            // Nothing else may run (sign out, save) while the account is being deleted.
+            .disabled(deletionViewModel.isDeleting)
             .navigationTitle("Settings")
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
@@ -31,7 +35,34 @@ struct SettingsView: View {
             // NOTE: keyboard-immune "pin like the tab bar" is deferred (see backlog).
             .safeAreaInset(edge: .bottom) {
                 saveBar
+                    .disabled(deletionViewModel.isDeleting)
             }
+        }
+        // Every way out of these alerts is a button whose action updates the ViewModel, so
+        // the bindings' setters are intentionally no-ops: letting SwiftUI's dismissal write
+        // `false` could race the "Delete" action and cancel the confirmation first.
+        .alert(
+            "Delete Account?",
+            isPresented: Binding(get: { deletionViewModel.isConfirming }, set: { _ in })
+        ) {
+            Button("Delete", role: .destructive) {
+                deletionViewModel.confirmDeletion()
+            }
+            Button("Cancel", role: .cancel) {
+                deletionViewModel.cancelDeletion()
+            }
+        } message: {
+            Text(AccountDeletionViewModel.confirmationMessage)
+        }
+        .alert(
+            "Couldn't Delete Account",
+            isPresented: Binding(get: { deletionViewModel.errorMessage != nil }, set: { _ in })
+        ) {
+            Button("OK", role: .cancel) {
+                deletionViewModel.dismissError()
+            }
+        } message: {
+            Text(deletionViewModel.errorMessage ?? "")
         }
         .task {
             if let user = appState.currentUser {
@@ -53,6 +84,28 @@ struct SettingsView: View {
             } label: {
                 Text("Sign Out")
             }
+        }
+    }
+
+    // MARK: - Delete Account (bottom, separate from Sign Out)
+
+    private var deleteAccountSection: some View {
+        Section {
+            Button(role: .destructive) {
+                focusedField = nil
+                phoneFocused = false
+                deletionViewModel.requestDeletion()
+            } label: {
+                HStack(spacing: 8) {
+                    if deletionViewModel.isDeleting {
+                        ProgressView()
+                    }
+                    Text(deletionViewModel.isDeleting ? "Deleting Account…" : "Delete Account")
+                }
+            }
+            .disabled(deletionViewModel.isDeleting)
+        } footer: {
+            Text("Permanently deletes your account and all of its data.")
         }
     }
 

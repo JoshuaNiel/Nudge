@@ -3,7 +3,7 @@ import SwiftUI
 /// Root view that gates the app based on auth state and onboarding completion.
 struct RootView: View {
     @EnvironmentObject private var appState: AppState
-    @AppStorage("onboardingComplete") private var onboardingComplete = false
+    @AppStorage(AppStorageKeys.onboardingComplete) private var onboardingComplete = false
 
     var body: some View {
         if appState.isLoading {
