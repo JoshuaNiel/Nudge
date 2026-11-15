@@ -9,7 +9,8 @@
 //
 // SHARED TYPES:
 // GoalSummary, PendingTrigger, AppGroupKeys, NudgeMessages, MonitoringPlan,
-// GoalProgressStore and ThresholdRouter all come from the `Shared/` folder, which is
+// GoalProgressStore, ThresholdRouter, WhyReminderStore and GoalNotificationComposer
+// all come from the `Shared/` folder, which is
 // compiled into this target as well as the main app. Do not re-declare them here — a
 // private copy that drifts from the app's version silently disarms monitoring.
 //
@@ -52,7 +53,7 @@ class NudgeMonitor: DeviceActivityMonitor {
 
         switch outcome {
         case let .milestone(goal, percent):
-            handleMilestone(goal: goal, percent: percent)
+            handleMilestone(goal: goal, percent: percent, eventName: eventName)
         case let .goalReached(goal):
             handleGoalReached(goal: goal, eventName: eventName)
         case let .sessionTimeout(session):
@@ -79,25 +80,33 @@ class NudgeMonitor: DeviceActivityMonitor {
 
     // MARK: - Milestone side effects
 
-    /// p10–p90. Progress is already recorded by `ThresholdRouter`.
-    private func handleMilestone(goal: GoalSummary, percent: Int) {
+    /// p10–p90. Progress and once-per-day dedup are already handled by `ThresholdRouter`.
+    /// Phase 4: when the user has a why at this percent, show one (round-robin).
+    private func handleMilestone(goal: GoalSummary, percent: Int, eventName: String) {
         logger.log("goal \(goal.goalId) reached \(percent)%")
-        // Phase 4 seam: why-reminders hook in here, switching on `percent`.
+        let why = nextWhy(goalId: goal.goalId, percent: percent)
+        guard let content = GoalNotificationComposer.milestone(goal: goal, percent: percent, why: why) else { return }
+        postLocalNotification(eventName: eventName, title: content.title, body: content.body)
     }
 
-    /// p100 — the goal's limit was reached (Phase 3 G5).
+    /// p100 — the goal's limit was reached (Phase 3 G5). A why at 100 becomes the body of
+    /// this same notification (Phase 4) — one notification, not two.
     private func handleGoalReached(goal: GoalSummary, eventName: String) {
-        postLocalNotification(
-            eventName: eventName,
-            title: NudgeMessages.limitReachedTitle(label: goal.targetLabel),
-            body: NudgeMessages.limitReachedBody(label: goal.targetLabel, limitSeconds: goal.limitSeconds)
-        )
+        let why = nextWhy(goalId: goal.goalId, percent: 100)
+        let content = GoalNotificationComposer.limitReached(goal: goal, why: why)
+        postLocalNotification(eventName: eventName, title: content.title, body: content.body)
 
         guard shouldSendGoalBreachNudge else { return }
         let userName = defaults?.string(forKey: AppGroupKeys.userFirstName) ?? "Your friend"
         let report = NudgeMessages.reportForGoal(userName: userName, goalSummary: goal)
         logger.log("goal \(goal.goalId) limit reached — queueing nudge: \(report, privacy: .public)")
         queueNudge(eventName: eventName, report: report)
+    }
+
+    /// The why to show for (goal, percent), advancing its rotation; `nil` when there is none.
+    private func nextWhy(goalId: Int, percent: Int) -> String? {
+        guard let defaults else { return nil }
+        return WhyReminderStore(defaults: defaults).nextMessage(goalId: goalId, percent: percent)
     }
 
     /// Phase 5E seam: becomes the user's "goal-breach nudges" toggle (read from the App
@@ -193,6 +202,11 @@ class NudgeMonitor: DeviceActivityMonitor {
 
     // MARK: - Local notification
 
+    /// Posts immediately. Without notification permission `add` fails (UNErrorDomain,
+    /// "notifications not allowed"): that is logged and nothing else happens — no crash,
+    /// and the rest of the threshold handling (nudges) is unaffected. No settings
+    /// pre-check: an extra async hop would only widen the window in which the extension
+    /// can be suspended before the post.
     private func postLocalNotification(eventName: String, title: String, body: String) {
         let content = UNMutableNotificationContent()
         content.title = title
@@ -206,7 +220,7 @@ class NudgeMonitor: DeviceActivityMonitor {
         )
         UNUserNotificationCenter.current().add(request) { error in
             if let error {
-                logger.error("failed to post local notification: \(error.localizedDescription, privacy: .public)")
+                logger.error("failed to post local notification for \(eventName, privacy: .public) (permission denied or not asked?): \(error.localizedDescription, privacy: .public)")
             }
         }
     }

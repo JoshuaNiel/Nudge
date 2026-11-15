@@ -1,140 +1,115 @@
-# Phase 4 — Notifications & Interventions
+# Phase 4 — Why-Reminders & Goal Notifications (v2)
 
-**Status:** `[ ] Not started`
+**Status:** `[~] Implemented 2026-11-14 (simulator-tested; device checks pending)`. Spec v2 approved 2026-11-14. Stacked on Phase 3b (goals-ui).
 
-**Goal:** Alert the user when they hit a usage goal threshold. Send periodic motivational reminders. (App blocking is out of scope for now — it requires a separate ManagedSettings entitlement.)
+**Goal:** A user attaches personal "why" messages to a goal ("I want to be present with my
+kids"). When usage reaches a percentage they chose for that why, a local notification
+shows it. Reaching the limit always produces a notification.
 
----
+## Resolved open questions (v1)
+1. *Can the monitor extension post local notifications?* **Yes.** Validated on device
+   2026-09-06 (it already posts on threshold).
+2. *Unlock prompt*: **dropped**. iOS exposes no unlock event.
+3. *Why-reminder frequency*: **not time-based**. The user decided why-reminders fire at a
+   per-why percentage of their goal (2026-11-14). The fixed 9am schedule and the per-goal
+   morning reminders are removed from scope.
 
-## Prerequisites
-
-- [x] Auth complete
-- [ ] Phase 1 complete — DeviceActivity monitoring running (thresholds require `DeviceActivityMonitor`)
-- [ ] Phase 3 complete — goals exist to trigger against
-- [ ] `why_reminder` table deployed (part of base schema — already done)
-- [ ] `DeviceActivityMonitor` extension target created (stub created in Phase 1)
-- [ ] Notification permission granted by user
-
----
-
-## Tasks
-
-### Why Reminders — CRUD
-- [ ] Add `WhyReminder` model:
-  ```swift
-  struct WhyReminder: Codable, Identifiable {
-      let id: Int
-      let userId: UUID   // user_id
-      let message: String
-  }
-  ```
-
-- [ ] Create `ReminderService`:
-  ```swift
-  class ReminderService {
-      func fetchReminders(userId: UUID) async throws -> [WhyReminder]
-      func addReminder(userId: UUID, message: String) async throws
-      func deleteReminder(id: Int) async throws
-  }
-  ```
-
-- [ ] Why Reminders UI in Settings:
-  - List of existing reminders
-  - Add reminder (text field + save)
-  - Delete reminder (swipe-to-delete)
-
-### Local Notification Service
-- [ ] Create `NotificationService`:
-  ```swift
-  class NotificationService {
-      func requestPermission() async throws -> Bool
-      func scheduleWhyReminder(message: String, at: DateComponents) async throws
-      func cancelWhyReminders() async
-      func scheduleGoalReminder(goalId: Int, message: String, at: DateComponents) async throws
-  }
-  ```
-
-- [ ] Schedule why reminders:
-  - On app launch, schedule (or re-schedule) why reminder notifications
-  - Select reminder: **round-robin** — track last-shown index in UserDefaults, advance by 1 each time
-  - Frequency: **once daily at 9am local time** (configurable in future)
-  - Cancel and reschedule when reminders are added/deleted
-
-### Goal Reminder Notifications
-- [ ] Schedule a periodic local notification per active goal reminding the user of their intention
-  - Example: "You've set a 1hr daily limit on Instagram. Stay intentional."
-  - Fires once daily (morning) for each active goal
-  - Cancel and reschedule when goals are added or deleted
-
-> **Open question:** When exactly should these fire — fixed morning time, or when the app is opened for the day? Should the user be able to disable them per goal? Decide before building.
-
-### `DeviceActivityMonitor` Extension — Threshold Alerts
-- [ ] Implement `DeviceActivityMonitorExtension` (target created in Phase 1)
-- [ ] Override `intervalDidStart`, `intervalDidEnd`, `eventDidReachThreshold`
-- [ ] In `eventDidReachThreshold`:
-  - Read the goal's `limitSeconds` and a why reminder from App Group UserDefaults
-  - Fire a local `UNNotificationRequest` immediately
-  - Notification body: "You've hit your [App Name] limit. [Why Reminder]"
-- [ ] Main app writes active goals + why reminders to App Group UserDefaults so the extension can read them without a Supabase call
-- [ ] Configure `DeviceActivityEvent` per goal when a goal is created/deleted — update monitoring schedule
-
-### Notification Permission
-- [ ] Wire up `PermissionsView` notification request to `NotificationService.requestPermission()`
-- [ ] In Settings: show current permission status, deep-link to iOS Settings if denied
-
----
-
-## Data Contracts
-
-### App Group UserDefaults keys
-| Key | Type | Written by | Read by |
-|---|---|---|---|
-| `nudge.goals.active` | JSON `[GoalSummary]` | Main app | `DeviceActivityMonitor` extension |
-| `nudge.reminders.roundrobin` | JSON `[String]` (messages) + `Int` (next index) | Main app | `DeviceActivityMonitor` extension |
-
-```swift
-struct GoalSummary: Codable {
-    let goalId: Int
-    let appBundleId: String?   // nil for category/total goals
-    let limitSeconds: Int
-    let targetLabel: String    // e.g. "Instagram", "Social Media", "All Apps"
-}
+## Data — migration `007_why_reminder_goal.sql`
+```sql
+delete from public.why_reminder;  -- unused so far; old rows have no goal to attach to
+alter table public.why_reminder
+  add column goal_id bigint not null references public.goal(id) on delete cascade,
+  add column notify_percent int not null default 80,
+  add constraint why_reminder_percent_step
+    check (notify_percent between 10 and 100 and notify_percent % 10 = 0);
+create index why_reminder_goal_idx on public.why_reminder(goal_id);
 ```
+The existing RLS (own rows) still applies. The insert policy must also check that `goal_id`
+belongs to the user (`exists (select 1 from goal where id = goal_id and user_id = auth.uid())`).
 
-### `DeviceActivityEvent` setup per goal
-```swift
-// Called when a goal is created or loaded at app startup
-let event = DeviceActivityEvent(
-    applications: [ApplicationToken],  // from goal's bundleId
-    threshold: DateComponents(second: goal.limitSeconds)
-)
-let eventName = DeviceActivityEvent.Name("goal-\(goal.id)")
-// Register with DeviceActivityCenter
-```
+`WhyReminder { id, userId, goalId, message (≤500, non-blank), notifyPercent }` with
+CodingKeys. `ReminderService` (protocol + class) provides fetch (all of the user's), add, update,
+and delete.
 
----
+## Delivery
+- The main app writes `nudge.reminders.byGoal` → `{goalId: {percent: [message]}}` to the App
+  Group on every foreground and after every reminder edit. This is **not** part of the
+  monitoring signature, so editing a why never re-registers monitoring (no reset).
+- Milestones are 10% steps (Phase 3a), so every allowed `notify_percent` matches an
+  existing event. No extra events are registered.
+- On milestone `goal.<id>.p<NN>` (after the Phase 3a dedup), if whys exist at NN, the extension
+  posts one notification:
+  - Title: "You're at NN% of your <label> limit" (p100: "You've hit your <label> limit")
+  - Body: one why message, rotating round-robin per (goal, percent). The index is stored in
+    `nudge.reminders.rr`.
+- p100 with no why at 100 → the generic limit notification from Phase 3a (body "You set a
+  2h daily limit on Instagram."). With a why at 100 → that notification uses the why as its
+  body (one notification, not two).
+- Notification permission denied → posting fails silently and is logged. No crash.
 
-## Open Questions
+## UI
+- **Goal detail → "Why" section:** a list of whys showing message + "at 80%". Add/edit sheet:
+  multiline message (required, ≤500, counter), percent picker 10…100 step 10 (default 80).
+  Swipe to delete.
+- **Settings → Notifications row:** current permission status (Allowed / Off / Not asked).
+  Off → "Open Settings" deep link. Not asked → a "Turn on" button that requests permission.
 
-> **Must be resolved before implementation begins.**
+## Acceptance criteria
+- [x] A user can add, edit and delete whys on a goal, each with its own percent.
+- [ ] Reaching that percent posts a notification with the why. Multiple whys at the same
+      percent rotate day to day.
+- [x] At most one notification per goal per milestone per day.
+- [x] Editing whys does not reset monitoring progress.
+- [ ] Settings shows notification permission and recovers from "denied".
+- [x] Tests: model coding, payload encoding of `byGoal`, round-robin selection, title/body
+      composition (p<100, p100 with/without why), percent validation.
 
-1. **Can local notifications be scheduled from within a `DeviceActivityMonitor` extension?**
-   Extensions run in a restricted sandbox. Confirm whether `UNUserNotificationCenter` is accessible from the monitor extension. If not, the extension may need to write a flag to the App Group container and let the main app fire the notification.
+Device-only (unchecked until verified on a phone): a why posts at its percent and rotates day
+to day; the permission row recovers from "denied" via the Settings app.
 
-2. **Unlock prompt feasibility:**
-   iOS does not expose an unlock event to third-party apps. Options:
-   - A scheduled morning notification ("Starting a new day — are you being intentional?")
-   - Not implemented — remove from scope if no viable mechanism exists
-   Decision required before starting this task.
+## Implementation notes (2026-11-14)
 
-3. **Why reminder frequency:** Once daily at 9am is the proposed default. Should this be user-configurable in Settings? Decide before building the scheduling logic.
+**Files**
+- `supabase/migrations/007_why_reminder_goal.sql` — goal_id/notify_percent/index + RLS rewrite.
+- `Shared/WhyReminderStore.swift` — `WhyRemindersByGoal`, `WhyReminderPayload` (JSON codec),
+  `WhyReminderRotation` (pure round-robin), `WhyReminderStore` (App Group read/write/rotate/clear).
+- `Shared/GoalNotification.swift` — `GoalNotificationComposer` (p<100 / p100 title + body).
+- `Shared/NudgeMessages.swift` — `milestoneReminderTitle`. `Shared/AppGroupKeys.swift` — the two keys.
+- App: `Models/WhyReminder.swift`, `Services/ReminderService.swift`,
+  `Services/WhyReminderAppGroup.swift` (payload builder, `WhyReminderAppGroupWriting`,
+  `WhyReminderSync`), `Features/Goals/WhyReminderRules.swift`, `WhyRemindersViewModel.swift`,
+  `WhyRemindersSection.swift`, `WhyReminderEditorSheet.swift`,
+  `Features/Settings/NotificationSettingsViewModel.swift` + `NotificationSettingsSection.swift`.
+- Edited: `GoalDetailView` (now a `List`; Why section + editor sheet), `SettingsView` (one line),
+  `NudgeApp.onForeground` (`WhyReminderSync.refresh`), `AppState.clearAppGroup`,
+  `MonitorExtension` (`handleMilestone` / `handleGoalReached`).
+- Tests: `NudgeTests/WhyReminderTests.swift` (64 tests).
 
----
+**Decisions beyond the spec**
+- **Length counts code points** (`unicodeScalars`), matching Postgres `varchar(500)`; `String.count`
+  (graphemes) would accept emoji-heavy text the DB rejects. Message trimmed of whitespace *and*
+  newlines.
+- **Rotation order is by reminder id** within (goal, percent), so it does not depend on row order
+  from Supabase. A stored index beyond the count (after a deletion) wraps (`index % count`); a
+  corrupt negative index restarts at 0. `write` never resets the rotation.
+- **The ViewModel loads all of the user's whys** (one request) and writes the complete list after
+  every successful add/edit/delete — the App Group copy covers every goal. Writes are refused until
+  a load has succeeded, otherwise one goal's edit would wipe every other goal's whys from the copy.
+  A successful load also refreshes the copy.
+- **RLS:** the `for all` policy is replaced by four per-command policies; insert/update also
+  require goal ownership. In addition, UPDATE is column-granted to `message, notify_percent` only.
+- **Migration delete is one-time**: guarded by "goal_id does not exist yet", so re-running 007
+  never deletes reminders created after it. Wrapped in a transaction.
+- **Permission denied in the extension:** no settings pre-check before posting (an extra async
+  hop would widen the window in which the extension can be suspended). `add` fails with
+  "notifications not allowed"; the failure is logged with the event name.
+- **Goal detail became a `List`** (`.insetGrouped`) for native swipe-to-delete; the Phase 3b cards
+  are drawn unchanged as inset-free, clear-background rows.
+- Settings row lives in its own `NotificationSettingsSection` (one line in `SettingsView`) and
+  re-checks on `.task` and on every foreground. "Open Settings" uses
+  `UIApplication.openNotificationSettingsURLString` (Nudge's notification page directly).
+- Deleting a goal cascades its whys in the DB; the App Group copy keeps the stale entry until the
+  next foreground. Harmless: no events are registered for a deleted goal.
 
-## Acceptance Criteria
-
-- [ ] User can add, view, and delete why reminders in Settings
-- [ ] Why reminder notifications fire daily (round-robin through the list)
-- [ ] When a goal's usage threshold is hit, a local notification fires with the app name and a why reminder
-- [ ] Notifications respect user's notification permission status
-- [ ] Revoking notification permission in iOS Settings gracefully degrades — no crash, no silent failures
+## PR
+`feat/why-reminders`, stacked on the Phase 3b branch.

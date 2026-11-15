@@ -15,6 +15,7 @@ struct NudgeApp: App {
 
     private let monitoringService = MonitoringRegistrationService.shared
     private let goalService = GoalService()
+    private let whyReminderSync = WhyReminderSync()
 
     init() {
         registerBackgroundTasks()
@@ -53,6 +54,11 @@ struct NudgeApp: App {
         pendingForegroundSync = false
 
         await refreshMonitoring(userId: userId)
+
+        // Phase 4: refresh the extension's copy of the user's whys. Independent of
+        // monitoring (never part of its signature), and a failed fetch leaves the
+        // existing copy in place rather than overwriting it with nothing.
+        await whyReminderSync.refresh(userId: userId)
 
         // Strategy 2: flush any queued nudge triggers now that we're in a reliable
         // (foregrounded) network context. Runs regardless of the outcome above —
