@@ -263,6 +263,7 @@ private final class MockGoalService: GoalServiceProtocol {
     func fetchGoals(userId: UUID) async throws -> [Goal] { [] }
     func createGoal(_ goal: GoalInsert) async throws {}
     func deleteGoal(id: Int, userId: UUID) async throws {}
+    func updateGoalSelection(id: Int, userId: UUID, selection: String) async throws {}
     func fetchGoalSummaries(userId: UUID) async throws -> [GoalSummary] {
         if let error { throw error }
         return summaries
@@ -386,6 +387,7 @@ private final class StubFriendService: FriendServiceProtocol {
     func deleteFriend(id: Int) async throws {}
     func updateFriendName(id: Int, name: String) async throws {}
     func fetchNudgeHistory(friendId: Int) async throws -> [Nudge] { [] }
+    func fetchFriendId(forNudgeId nudgeId: Int) async throws -> Int? { nil }
 }
 
 @MainActor

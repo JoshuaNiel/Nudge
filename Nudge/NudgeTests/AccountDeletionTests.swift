@@ -226,8 +226,8 @@ struct AccountCleanupServiceTests {
         appGroup.set("2026-11-14", forKey: AppGroupKeys.lastRegisteredDay)
         appGroup.set("total=3600", forKey: AppGroupKeys.lastRegisteredSignature)
         appGroup.set(true, forKey: AppGroupKeys.midnightSyncNeeded)
-        appGroup.set(Data([7]), forKey: AppGroupKeys.appSelectionKey("com.example.app"))
-        appGroup.set(Data([8]), forKey: AppGroupKeys.categorySelectionKey(42))
+        appGroup.set(Data([7]), forKey: AppGroupKeys.progressKey(day: "2026-11-14"))
+        appGroup.set(Data([8]), forKey: AppGroupKeys.firedKey(day: "2026-11-14"))
         appGroup.set("future", forKey: "nudge.someFutureKey")   // not listed in AppGroupKeys
     }
 
@@ -251,8 +251,8 @@ struct AccountCleanupServiceTests {
         #expect(appGroup.object(forKey: AppGroupKeys.goalsActive) == nil)
         #expect(appGroup.object(forKey: AppGroupKeys.triggersPending) == nil)
         #expect(appGroup.object(forKey: AppGroupKeys.lastRegisteredDay) == nil)
-        #expect(appGroup.object(forKey: AppGroupKeys.appSelectionKey("com.example.app")) == nil)
-        #expect(appGroup.object(forKey: AppGroupKeys.categorySelectionKey(42)) == nil)
+        #expect(appGroup.object(forKey: AppGroupKeys.progressKey(day: "2026-11-14")) == nil)
+        #expect(appGroup.object(forKey: AppGroupKeys.firedKey(day: "2026-11-14")) == nil)
         #expect(appGroup.object(forKey: "nudge.someFutureKey") == nil)
     }
 

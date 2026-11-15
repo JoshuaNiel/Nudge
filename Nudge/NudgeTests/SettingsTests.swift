@@ -368,6 +368,7 @@ private final class InertFriendService: FriendServiceProtocol {
     func deleteFriend(id: Int) async throws {}
     func updateFriendName(id: Int, name: String) async throws {}
     func fetchNudgeHistory(friendId: Int) async throws -> [Nudge] { [] }
+    func fetchFriendId(forNudgeId nudgeId: Int) async throws -> Int? { nil }
 }
 
 private final class InertMonitoringService: MonitoringRegistrationServiceProtocol {
