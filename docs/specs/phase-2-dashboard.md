@@ -1,6 +1,6 @@
 # Phase 2 — Dashboard
 
-**Status:** `[ ] Not started`
+**Status:** `[~] Implemented — awaiting on-device verification` (acceptance criteria are verified on a physical device; the simulator has no Screen Time data)
 
 **Goal:** Show the user their usage data — today's summary and per-app breakdown — displayed on-device using `DeviceActivityReport`. No Supabase queries needed for display; all data comes directly from Apple's Screen Time system via the extension.
 
@@ -58,7 +58,7 @@ The user can view usage for any single day. The filter passed to `DeviceActivity
 
 ### Extension — `NudgeActivityReport` target
 
-- [ ] Define `DailyUsageSummary` struct (in extension target):
+- [x] Define `DailyUsageSummary` struct — implemented in `Shared/UsageSummary.swift` (not extension-only; see Implementation Decisions):
   ```swift
   struct DailyUsageSummary {
       let totalSeconds: Int
@@ -74,12 +74,12 @@ The user can view usage for any single day. The filter passed to `DeviceActivity
   }
   ```
 
-- [ ] Update `TotalActivityReport.swift` — `makeConfiguration` returns `DailyUsageSummary` instead of `[PendingUsageEntry]`
+- [x] Update `TotalActivityReport.swift` — `makeConfiguration` returns `DailyUsageSummary` instead of `[PendingUsageEntry]`
   - Aggregate seconds and pickups per bundle ID
   - Sort apps by seconds descending
   - Derive `displayName` from bundle ID last component (e.g. `"com.instagram.Instagram"` → `"Instagram"`)
 
-- [ ] Implement `DashboardReportView` in `TotalActivityView.swift`:
+- [x] Implement `DashboardReportView` in `TotalActivityView.swift`:
   - Total time header: `"2h 34m"` (use `Int.formattedDuration`)
   - Pickups count: `"47 pickups"`
   - Per-app list: app name + formatted duration + simple relative bar (width proportional to `seconds / totalSeconds`)
@@ -87,14 +87,14 @@ The user can view usage for any single day. The filter passed to `DeviceActivity
 
 ### Main App — `DashboardView`
 
-- [ ] Replace `DashboardView` stub with real implementation:
+- [x] Replace `DashboardView` stub with real implementation:
   - `@State private var selectedDate: Date = Date()`
   - Hosts `DeviceActivityReport(.nudgeSummary, filter: filterForDate(selectedDate))`
   - Date navigation: `<` / `>` buttons to step through days; disable `>` when `selectedDate` is today
   - Title shows selected date: `"Today"` when current, `"Apr 14"` otherwise
-  - Pull-to-refresh: increment/decrement a `@State var refreshId: UUID` and pass as `.id()` to force the report to re-render
+  - ~~Pull-to-refresh~~ → toolbar refresh button + auto-refresh on foreground (see Implementation Decisions): increment/decrement a `@State var refreshId: UUID` and pass as `.id()` to force the report to re-render
 
-- [ ] `filterForDate(_ date: Date) -> DeviceActivityFilter`:
+- [x] `filterForDate(_ date: Date) -> DeviceActivityFilter` — date math lives in `DashboardDay.filterInterval(for:calendar:)` (Shared, tested):
   ```swift
   private func filterForDate(_ date: Date) -> DeviceActivityFilter {
       let interval = Calendar.current.dateInterval(of: .day, for: date)
@@ -103,7 +103,7 @@ The user can view usage for any single day. The filter passed to `DeviceActivity
   }
   ```
 
-- [ ] Add `Int.formattedDuration` extension (shared between main app and extension):
+- [x] Add `Int.formattedDuration` extension — now `Shared/DurationFormatting.swift`, compiled into all three targets (shared between main app and extension):
   ```swift
   // e.g. 5400 → "1h 30m", 600 → "10m", 3660 → "1h 1m", 45 → "< 1m", 0 → "0m"
   ```
@@ -114,7 +114,7 @@ The user can view usage for any single day. The filter passed to `DeviceActivity
 ## Data Contracts
 
 ### `DeviceActivityReport.Context`
-Defined in both the main app and extension targets (must use identical raw string):
+Defined once in `Shared/ReportContext.swift`, compiled into the app and the report extension (excluded from the monitor extension):
 ```swift
 extension DeviceActivityReport.Context {
     static let nudgeSummary = Self("NudgeSummary")
@@ -203,4 +203,26 @@ struct NudgeUsageReport: DeviceActivityReportScene {
 - [ ] Day navigation works — `<` / `>` steps through days; `>` disabled on today
 - [ ] Empty state shown when no usage data exists for the selected day
 - [ ] No Screen Time permission shows a graceful degraded state — no crash
-- [ ] Pull-to-refresh forces the report to re-render with fresh data
+- [ ] Refresh (toolbar button, and returning to the app) forces the report to re-render with fresh data
+
+---
+
+## Implementation Decisions (2026-11-14)
+
+- **Pure logic in `Shared/`.** `DailyUsageSummary`, `AppUsageEntry`, aggregation, display-name fallback, bar geometry, pickups copy and day-navigation math live in `Shared/UsageSummary.swift` and take plain values, because `DeviceActivityData` has no public initializer and cannot be built in tests. The extension's `makeConfiguration` only walks `DeviceActivityResults` (`activitySegments` → `categories` → `applications`) and maps to `UsageSegmentSample`/`AppUsageSample`. Tests: `NudgeTests/DashboardTests.swift`.
+- **`Shared/` is now compiled into the report extension** (third entry in its `fileSystemSynchronizedGroups`). `ReportContext.swift` is excluded from `NudgeActivityMonitor` via a membership exception so the memory-constrained monitor does not link SwiftUI for one constant.
+- **Generic token payload.** The types are generic over `Token: Hashable`; the extension uses `DailyUsageSummary<ApplicationToken>` so each row renders the real name and icon with `Label(token)`, falling back to the derived display name when the token is nil. Tests use `String`.
+- **Merge key:** bundle id → token → localized name. Samples with none of these are dropped from the list, but their time still counts in the total.
+- **Display name:** `localizedDisplayName` (now exposed by the SDK) → last bundle-id component, first letter capitalized (`com.google.ios.youtube` → `Youtube`) → whole bundle id → `"Unknown App"`. Only used when the token is nil.
+- **Totals:** `totalSeconds` = sum of segment `totalActivityDuration` (includes time not attributed to a listed app), floored at the sum of listed apps; durations rounded once at the end. `totalPickups` = sum of `totalPickupsWithoutApplicationActivity` + per-app `numberOfPickups`. Apps with zero time and zero pickups are omitted.
+- **Sort:** seconds descending, then display name (case-insensitive), then bundle id.
+- **Bar:** `seconds / totalSeconds`, clamped to `0...1`; any non-zero fraction renders at least 2pt; never wider than the track.
+- **Empty state:** shown when `totalSeconds == 0` — copy "No usage recorded for this day".
+- **Day range:** today back to 30 days before today (31 selectable days); `<` disabled at the earliest day, `>` disabled on today. Selection is stored as a start of day and re-clamped on foreground so it stays valid across midnight. Title: "Today", "Yesterday", or a localized month-day (`"Apr 14"` in en_US).
+- **Refresh is a toolbar button, not pull-to-refresh.** The report is a remote view rendered by another process: touches inside it never reach a host `ScrollView`, so `.refreshable` would only respond to drags on the thin day-navigator strip. The report also scrolls itself, and nesting it in a host scroll view would require a fixed height the host cannot know. The report is additionally refreshed every time the app returns to the foreground. The report's `.id` is keyed on (day, refreshId).
+- **Authorization:** `.approved` and (iOS 26.4+) `.approvedWithDataAccess` both count as authorized; anything else shows "Screen Time access required" with an Open Settings button.
+- **Monitoring not registered:** "Usage tracking not active" with a Check Again button. Because the app registers monitoring asynchronously on foreground (after a network fetch), the dashboard also re-checks every 2s, up to 5 times, while in this state.
+- **Loading:** a `ProgressView` sits behind the report; the extension's view has an opaque background that covers it once drawn.
+- **Devices filter:** left at the default (`DeviceActivityFilter` with no explicit devices). With `.individual` authorization only this device's data is reported.
+- **Extension isolation:** the `NudgeActivityReport` struct is `@MainActor` — scenes are main-actor isolated (ExtensionKit's `AppExtensionScene`) while the SDK leaves `DeviceActivityReportExtension.body` unannotated, which otherwise warns (an error in Swift 6 mode).
+- **Cleanup:** no hidden `DeviceActivityReport`, `PendingUsageEntry` or `UsageSyncService` remained in code; nothing to remove. ADR-044 and ADR-047 describe the abandoned App Group sync and are now historical.
