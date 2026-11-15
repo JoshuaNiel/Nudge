@@ -69,6 +69,23 @@ Extends Supabase Auth with user-specific settings.
 | settingsLocationLat | double precision | For location-based settings lock |
 | settingsLocationLon | double precision | For location-based settings lock |
 
+**`session_timeout_minutes`** (migration 003) — **DEPRECATED since migration 008**: backfilled into `nudge_settings` and no longer read or written by the app. Kept until a later cleanup migration drops it.
+
+### `nudge_settings` (migration 008, Phase 5E)
+One row per user: the global nudge trigger toggles (ADR-039). **No row = defaults**; the app upserts on `user_id` at first save.
+
+| Column | Type | Notes |
+|---|---|---|
+| user_id | uuid | PK, FK → auth.users(id) `on delete cascade` |
+| session_timeout_enabled | boolean | default `true` |
+| session_timeout_minutes | int | default `60`; CHECK in (15, 30, 60, 90, 120) |
+| goal_breach_enabled | boolean | default `false` — nudge friends when a goal hits 100% |
+| daily_report_enabled | boolean | default `false` (sending: Phase 5E-2) |
+| daily_report_time | time | default `08:00`, the user's local wall-clock time. App sends/accepts `HH:mm:ss`. |
+| updated_at | timestamptz | set by trigger `nudge_settings_set_updated_at` on update |
+
+RLS enabled + forced; select / insert / update own row only (`(select auth.uid()) = user_id`); no delete policy. The monitor extension reads the goal-breach and daily-report toggles from the App Group mirror `nudge.settings` (missing → all off), not from the DB.
+
 ### `app` — DEPRECATED (unused since migration 006)
 Canonical app registry. Bundle ID is the primary key — no generated integer ID needed.
 Never populated (the usage pipeline it was meant for is impossible, ADR-049) and no longer

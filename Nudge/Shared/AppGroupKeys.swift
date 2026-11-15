@@ -29,6 +29,11 @@ enum AppGroupKeys {
     /// JSON-encoded [FriendSummary] of accepted friends.
     static let friendsAccepted = "nudge.friends.accepted"
 
+    // MARK: - Nudge settings (main app → DeviceActivityMonitor extension), Phase 5E
+    /// JSON-encoded `NudgeTriggerSettings` (goal breach + daily report toggles). Missing
+    /// or undecodable reads as all-off (`NudgeTriggerSettings.failClosed`).
+    static let nudgeSettings = "nudge.settings"
+
     // MARK: - Triggers (Strategy 2 fallback: monitor extension → main app)
     static let triggersPending = "nudge.triggers.pending"
 

@@ -17,11 +17,13 @@ class AppState: ObservableObject {
     /// Defaults to the device timezone if not yet loaded from profile.
     @Published var timeZone: TimeZone = .current
 
-    /// Configured session timeout in minutes (nil = disabled).
+    /// Configured session timeout in minutes (nil = disabled), from `nudge_settings`
+    /// (Phase 5E). Refreshed by `fetchAndCacheNudgeSettings`.
     @Published var sessionTimeoutMinutes: Int? = nil
 
     let authService = AuthService()
     private let friendService = FriendService()
+    private let nudgeSettingsService: NudgeSettingsServiceProtocol = NudgeSettingsService()
 
     /// This device's APNs token, uploaded for whichever user is signed in.
     let pushTokens = PushTokenManager()
@@ -108,26 +110,24 @@ class AppState: ObservableObject {
     }
 
     /// Loads the profile into `AppState` and mirrors the first name to the App Group.
+    /// Returns whether the fetch succeeded.
     ///
-    /// Returns whether the fetch succeeded. Callers that arm DeviceActivity
-    /// monitoring must check it: a silent failure leaves `sessionTimeoutMinutes`
-    /// at `nil`, which would register monitoring without the session-timeout event.
+    /// The session timeout no longer comes from here (Phase 5E): see
+    /// `fetchAndCacheNudgeSettings`.
     @discardableResult
     func fetchAndCacheProfile(userId: UUID) async -> Bool {
         struct ProfileRow: Decodable {
             let firstName: String?
             let timeZone: String?
-            let sessionTimeoutMinutes: Int?
             enum CodingKeys: String, CodingKey {
                 case firstName = "first_name"
                 case timeZone = "time_zone"
-                case sessionTimeoutMinutes = "session_timeout_minutes"
             }
         }
 
         guard let row: ProfileRow = try? await supabase
             .from("profile")
-            .select("first_name, time_zone, session_timeout_minutes")
+            .select("first_name, time_zone")
             .eq("user_id", value: userId)
             .single()
             .execute()
@@ -135,11 +135,26 @@ class AppState: ObservableObject {
 
         let name = row.firstName ?? ""
         userFirstName = name
-        sessionTimeoutMinutes = row.sessionTimeoutMinutes
         if let tzId = row.timeZone, let tz = TimeZone(identifier: tzId) {
             timeZone = tz
         }
         UserDefaults(suiteName: AppGroupKeys.suiteName)?.set(name, forKey: AppGroupKeys.userFirstName)
+        return true
+    }
+
+    /// Loads `nudge_settings` (defaults when the user has no row), sets
+    /// `sessionTimeoutMinutes`, and mirrors the trigger toggles to the App Group for the
+    /// monitor extension.
+    ///
+    /// Returns whether the fetch succeeded. Callers that arm DeviceActivity monitoring
+    /// must check it (ADR-055): on failure nothing is changed — neither
+    /// `sessionTimeoutMinutes` nor the App Group — so a failed request can never be
+    /// mistaken for "session timeout off".
+    @discardableResult
+    func fetchAndCacheNudgeSettings(userId: UUID) async -> Bool {
+        guard let settings = try? await nudgeSettingsService.fetch(userId: userId) else { return false }
+        sessionTimeoutMinutes = settings.effectiveSessionTimeoutMinutes
+        NudgeTriggerSettings.persist(settings.triggerSettings, defaults: UserDefaults(suiteName: AppGroupKeys.suiteName))
         return true
     }
 
@@ -160,5 +175,7 @@ class AppState: ObservableObject {
         defaults?.removeObject(forKey: AppGroupKeys.goalsActive)
         // Why-reminders and their rotation are the signed-out user's personal text.
         if let defaults { WhyReminderStore(defaults: defaults).clear() }
+        // Signed out → the extension fails closed (no goal-breach nudges).
+        defaults?.removeObject(forKey: AppGroupKeys.nudgeSettings)
     }
 }

@@ -99,17 +99,23 @@ struct NudgeApp: App {
         await NudgeTriggerService().drainPendingTriggers(userId: userId)
     }
 
-    /// Re-registers monitoring from freshly fetched goals.
+    /// Re-registers monitoring from freshly fetched goals and nudge settings.
     ///
-    /// Both fetches must succeed before touching `DeviceActivityCenter`. A failed
-    /// request used to arrive here as an empty goal list, indistinguishable from
-    /// "this user has no goals" — which re-registered with zero events and silently
-    /// disarmed every trigger until the next successful foreground (ADR-054).
-    /// Leaving yesterday's registration in place is strictly safer than replacing it
-    /// with one built from data we do not have.
+    /// Both the settings fetch and the goal fetch must succeed before touching
+    /// `DeviceActivityCenter`. A failed request used to arrive here as an empty goal list,
+    /// indistinguishable from "this user has no goals" — which re-registered with zero
+    /// events and silently disarmed every trigger until the next successful foreground
+    /// (ADR-054/055). Leaving yesterday's registration in place is strictly safer than
+    /// replacing it with one built from data we do not have.
+    ///
+    /// The profile is still refreshed (first name for SMS copy, time zone) but no longer
+    /// gates registration: since Phase 5E it carries nothing that is registered.
     private func refreshMonitoring(userId: UUID) async {
-        guard await appState.fetchAndCacheProfile(userId: userId) else {
-            NudgeApp.logger.error("profile fetch failed — leaving existing monitoring registration untouched")
+        if !(await appState.fetchAndCacheProfile(userId: userId)) {
+            NudgeApp.logger.error("profile fetch failed — keeping the cached first name")
+        }
+        guard await appState.fetchAndCacheNudgeSettings(userId: userId) else {
+            NudgeApp.logger.error("nudge settings fetch failed — leaving existing monitoring registration untouched")
             return
         }
         guard let goals = try? await goalService.fetchGoalSummaries(userId: userId) else {
