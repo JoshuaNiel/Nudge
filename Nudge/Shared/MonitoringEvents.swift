@@ -6,6 +6,8 @@ enum MonitoredEvent: Equatable {
     case milestone(goalId: Int, percent: Int)
     /// `session.timeout` — the session-timeout pseudo-goal fired.
     case sessionTimeout
+    /// `total.m<NN>` — total device usage today reached NN minutes (Phase 5E daily report).
+    case dailyTotal(minutes: Int)
     /// Anything else, including pre-3a names (`total`, `app.<bundle>`, `category.<id>`).
     case unknown
 }
@@ -16,6 +18,11 @@ enum MonitoredEvent: Equatable {
 // (`goal.42.p10`, `goal.42.p100`). `session.timeout` is unchanged. Parsing accepts only
 // the canonical spelling a registration could have produced, so a name is either one we
 // registered or `.unknown` — never a near miss.
+//
+// Daily report (Phase 5E-2): `total.m<NN>` with NN ∈ {15, 30, …, 720} minutes, no zero
+// padding (`total.m15`, `total.m720`), all device usage (no app filter). Registered only
+// while the daily report is on. Distinct from the pre-3a legacy name `total`, which is
+// still `.unknown`.
 
 extension MonitoringPlan {
 
@@ -48,8 +55,33 @@ extension MonitoringPlan {
         max(1, limitSeconds * percent / 100)
     }
 
+    // MARK: Daily total milestones (Phase 5E-2)
+
+    /// Total-usage milestones are registered every `dailyTotalStepMinutes` minutes up to
+    /// `dailyTotalMaxMinutes`. The report is only as precise as the step.
+    static let dailyTotalStepMinutes = 15
+    static let dailyTotalMaxMinutes = 720
+
+    static var dailyTotalMilestoneMinutes: [Int] {
+        Array(stride(from: dailyTotalStepMinutes, through: dailyTotalMaxMinutes, by: dailyTotalStepMinutes))
+    }
+
+    private static let dailyTotalEventPrefix = "total.m"
+
+    static func dailyTotalEventName(minutes: Int) -> String {
+        "\(dailyTotalEventPrefix)\(minutes)"
+    }
+
+    /// The 48 total-usage events (no app filter); threshold = the milestone in seconds.
+    static var dailyTotalEventSpecs: [EventSpec] {
+        dailyTotalMilestoneMinutes.map {
+            EventSpec(name: dailyTotalEventName(minutes: $0), thresholdSeconds: $0 * 60)
+        }
+    }
+
     static func parseEventName(_ name: String) -> MonitoredEvent {
         if name == sessionTimeoutEventName { return .sessionTimeout }
+        if name.hasPrefix(dailyTotalEventPrefix) { return parseDailyTotal(name) }
         guard name.hasPrefix(goalEventPrefix) else { return .unknown }
 
         let parts = name.dropFirst(goalEventPrefix.count).split(separator: ".", omittingEmptySubsequences: false)
@@ -63,6 +95,15 @@ extension MonitoringPlan {
         else { return .unknown }
 
         return .milestone(goalId: goalId, percent: percent)
+    }
+
+    private static func parseDailyTotal(_ name: String) -> MonitoredEvent {
+        guard let minutes = Int(name.dropFirst(dailyTotalEventPrefix.count)),
+              dailyTotalMilestoneMinutes.contains(minutes),
+              // Reject non-canonical spellings Int() tolerates ("+15", "015").
+              dailyTotalEventName(minutes: minutes) == name
+        else { return .unknown }
+        return .dailyTotal(minutes: minutes)
     }
 
     // MARK: - Event specs (pure)

@@ -6,15 +6,35 @@ import Foundation
 
 /// A fired trigger written by the DeviceActivityMonitor extension (Strategy 2 fallback).
 /// Read by NudgeTriggerService when the main app wakes via BGProcessingTask.
-struct PendingTrigger: Codable {
-    let eventName: String   // e.g. "goal.42.p100", "session.timeout"
+///
+/// `notBefore` (Phase 5E-2) holds a trigger back until a wall-clock time — the daily
+/// report is queued at midnight for the user's chosen time. It is optional and decoded
+/// with `decodeIfPresent` (synthesized for optionals), so queues written by earlier
+/// versions still decode; `nil` means "send as soon as possible".
+struct PendingTrigger: Codable, Equatable {
+    let eventName: String   // e.g. "goal.42.p100", "session.timeout", "daily.report"
     let report: String      // pre-built SMS report text (composed by the extension)
-    let timestamp: Date
+    let timestamp: Date     // when it was queued; with eventName, its identity in the queue
+    let notBefore: Date?
+
+    init(eventName: String, report: String, timestamp: Date, notBefore: Date? = nil) {
+        self.eventName = eventName
+        self.report = report
+        self.timestamp = timestamp
+        self.notBefore = notBefore
+    }
+
+    /// Due at `now`: no hold, or the hold has passed.
+    func isDue(at now: Date) -> Bool {
+        guard let notBefore else { return true }
+        return notBefore <= now
+    }
 
     enum CodingKeys: String, CodingKey {
         case eventName = "event_name"
         case report
         case timestamp
+        case notBefore = "not_before"
     }
 }
 

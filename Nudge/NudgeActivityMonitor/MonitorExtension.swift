@@ -9,7 +9,8 @@
 //
 // SHARED TYPES:
 // GoalSummary, PendingTrigger, AppGroupKeys, NudgeMessages, MonitoringPlan, NudgeTriggerSettings,
-// GoalProgressStore and ThresholdRouter all come from the `Shared/` folder, which is
+// GoalProgressStore, ThresholdRouter, PendingTriggerQueue and DailyReport all come from the
+// `Shared/` folder, which is
 // compiled into this target as well as the main app. Do not re-declare them here — a
 // private copy that drifts from the app's version silently disarms monitoring.
 //
@@ -57,6 +58,9 @@ class NudgeMonitor: DeviceActivityMonitor {
             handleGoalReached(goal: goal, eventName: eventName)
         case let .sessionTimeout(session):
             handleSessionTimeout(session: session, eventName: eventName)
+        case let .dailyTotal(minutes):
+            // Recorded by ThresholdRouter for the daily report; no notification, no nudge.
+            logger.log("total usage reached \(minutes) min today")
         case .duplicate:
             logger.log("\(eventName, privacy: .public) already handled today — skipping side effects")
         case .unmatched:
@@ -131,11 +135,21 @@ class NudgeMonitor: DeviceActivityMonitor {
     /// working with the app never opened: a `DeviceActivityEvent` threshold fires at
     /// most once per `startMonitoring` call, and iOS does not reliably re-arm spent
     /// thresholds when a `repeats: true` interval rolls over (ADR-054).
+    ///
+    /// Before re-arming it queues yesterday's daily report (Phase 5E-2). Prune keeps
+    /// yesterday's total, and `DailyReport.enqueueIfNeeded` is idempotent per reported
+    /// day, so the second `intervalDidStart` that re-registering provokes is a no-op. A
+    /// mid-day `intervalDidStart` (an app registration after a missed midnight) catches
+    /// up on a report that was never queued.
     override func intervalDidStart(for activity: DeviceActivityName) {
         logger.log("intervalDidStart — clearing day-scoped state and re-arming")
         if let defaults {
+            let now = Date()
             defaults.removeObject(forKey: AppGroupKeys.midnightSyncNeeded)
-            GoalProgressStore(defaults: defaults).prune(keepingDaysFrom: Date(), calendar: .current)
+            GoalProgressStore(defaults: defaults).prune(keepingDaysFrom: now, calendar: .current)
+            if DailyReport.enqueueIfNeeded(defaults: defaults, now: now, calendar: .current) != nil {
+                scheduleMainAppProcessing()
+            }
         }
         reregisterIfNeeded(reason: "intervalDidStart")
     }
@@ -170,22 +184,23 @@ class NudgeMonitor: DeviceActivityMonitor {
             logger.error("App Group defaults unavailable — cannot enqueue trigger")
             return
         }
-
-        var pending = MonitoringPlan.loadPendingTriggers(from: defaults)
-        pending.append(PendingTrigger(eventName: eventName, report: report, timestamp: Date()))
-
-        guard let encoded = try? JSONEncoder().encode(pending) else {
-            logger.error("failed to encode pending triggers")
-            return
-        }
-        defaults.set(encoded, forKey: AppGroupKeys.triggersPending)
-        logger.log("enqueued pending trigger — queue size now \(pending.count)")
+        let size = PendingTriggerQueue.append(
+            PendingTrigger(eventName: eventName, report: report, timestamp: Date()),
+            to: defaults
+        )
+        logger.log("enqueued pending trigger — queue size now \(size)")
     }
 
+    /// `earliestBeginDate` follows the queue: held until the earliest `notBefore` only
+    /// when nothing queued is due yet (`PendingTriggerQueue.earliestBeginDate`).
     private func scheduleMainAppProcessing() {
         let request = BGProcessingTaskRequest(identifier: BGTaskIdentifiers.nudgeTrigger)
         request.requiresNetworkConnectivity = true
         request.requiresExternalPower = false
+        request.earliestBeginDate = PendingTriggerQueue.earliestBeginDate(
+            for: PendingTriggerQueue.load(from: defaults),
+            now: Date()
+        )
         do {
             try BGTaskScheduler.shared.submit(request)
             logger.log("scheduled main-app nudge-trigger processing")

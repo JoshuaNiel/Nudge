@@ -10,8 +10,7 @@ protocol PendingTriggerStore {
     func save(_ triggers: [PendingTrigger])
 }
 
-/// Production store: reads/writes a JSON-encoded `[PendingTrigger]` in the shared
-/// App Group UserDefaults at `AppGroupKeys.triggersPending`.
+/// Production store: the shared App Group queue (`PendingTriggerQueue`).
 final class AppGroupPendingTriggerStore: PendingTriggerStore {
 
     private var defaults: UserDefaults? {
@@ -19,17 +18,11 @@ final class AppGroupPendingTriggerStore: PendingTriggerStore {
     }
 
     func load() -> [PendingTrigger] {
-        MonitoringPlan.loadPendingTriggers(from: defaults)
+        PendingTriggerQueue.load(from: defaults)
     }
 
     func save(_ triggers: [PendingTrigger]) {
-        guard let defaults else { return }
-        if triggers.isEmpty {
-            defaults.removeObject(forKey: AppGroupKeys.triggersPending)
-            return
-        }
-        guard let data = try? JSONEncoder().encode(triggers) else { return }
-        defaults.set(data, forKey: AppGroupKeys.triggersPending)
+        PendingTriggerQueue.save(triggers, to: defaults)
     }
 }
 
@@ -49,6 +42,11 @@ final class NudgeTriggerService: NudgeTriggerServiceProtocol {
     private let store: PendingTriggerStore
     private let nudgeService: NudgeServiceProtocol
     private let friendService: FriendServiceProtocol
+    private let now: () -> Date
+    private let calendar: Calendar
+    /// The App Group settings mirror — the same source the extension reads — so turning
+    /// the daily report off drops reports already queued.
+    private let triggerSettings: () -> NudgeTriggerSettings
 
     private let logger = Logger(subsystem: "com.joshuaqn.Nudge", category: "NudgeTriggerService")
 
@@ -57,36 +55,62 @@ final class NudgeTriggerService: NudgeTriggerServiceProtocol {
         self.store = AppGroupPendingTriggerStore()
         self.nudgeService = NudgeService()
         self.friendService = FriendService()
+        self.now = { Date() }
+        self.calendar = .current
+        self.triggerSettings = { NudgeTriggerSettings.load(from: UserDefaults(suiteName: AppGroupKeys.suiteName)) }
     }
 
     // Test / dependency-injection init.
     init(
         store: PendingTriggerStore,
         nudgeService: NudgeServiceProtocol,
-        friendService: FriendServiceProtocol
+        friendService: FriendServiceProtocol,
+        now: @escaping () -> Date = { Date() },
+        calendar: Calendar = .current,
+        triggerSettings: (() -> NudgeTriggerSettings)? = nil
     ) {
         self.store = store
         self.nudgeService = nudgeService
         self.friendService = friendService
+        self.now = now
+        self.calendar = calendar
+        let failClosed = NudgeTriggerSettings.failClosed   // default: report off
+        self.triggerSettings = triggerSettings ?? { failClosed }
     }
 
+    /// Sends the triggers that are due (`notBefore` nil or passed) and leaves the rest
+    /// queued untouched (Phase 5E-2). Daily reports that were turned off or have expired
+    /// are removed without sending — before any network call, so a failed friend fetch
+    /// cannot keep them alive.
     func drainPendingTriggers(userId: UUID) async {
         let pending = store.load()
         guard !pending.isEmpty else { return }
 
-        logger.debug("draining \(pending.count) pending trigger(s)")
+        let partition = PendingTriggerQueue.partition(
+            pending,
+            now: now(),
+            calendar: calendar,
+            dailyReportEnabled: triggerSettings().dailyReportEnabled
+        )
+        logger.debug("draining — due \(partition.due.count), deferred \(partition.deferred.count), dropped \(partition.dropped.count)")
+
+        if !partition.dropped.isEmpty {
+            remove(partition.dropped)
+        }
+        guard !partition.due.isEmpty else { return }
 
         // Fetch accepted friends. On failure, retain everything to retry later.
         guard let allFriends = try? await friendService.fetchFriends(userId: userId) else {
-            logger.error("friend fetch failed — retaining \(pending.count) trigger(s) for retry")
+            logger.error("friend fetch failed — retaining \(partition.due.count) due trigger(s) for retry")
             return
         }
         let accepted = allFriends.filter { $0.status == .accepted }
 
-        // Nobody to notify: nothing more will ever come of these triggers, so clear.
+        // Nobody to notify: nothing more will ever come of the due triggers, so clear them.
+        // Deferred ones stay: a friend may accept before they come due.
         guard !accepted.isEmpty else {
-            logger.debug("no accepted friends — clearing \(pending.count) pending trigger(s)")
-            store.save([])
+            logger.debug("no accepted friends — clearing \(partition.due.count) due trigger(s)")
+            remove(partition.due)
             return
         }
 
@@ -94,7 +118,7 @@ final class NudgeTriggerService: NudgeTriggerServiceProtocol {
         var sentCount = 0
         var failureCount = 0
 
-        for trigger in pending {
+        for trigger in partition.due {
             var allSucceeded = true
             for friend in accepted {
                 do {
@@ -111,17 +135,21 @@ final class NudgeTriggerService: NudgeTriggerServiceProtocol {
             }
         }
 
-        logger.debug("drain complete — sent \(sentCount), failures \(failureCount), processed \(processed.count)/\(pending.count)")
+        logger.debug("drain complete — sent \(sentCount), failures \(failureCount), processed \(processed.count)/\(partition.due.count)")
 
         guard !processed.isEmpty else { return }
+        remove(processed)
+    }
 
-        // Read-modify-write: re-load so we don't drop triggers the extension may have
-        // appended while we were draining. Only remove entries we actually processed.
+    /// Read-modify-write: re-load so we don't drop triggers the extension may have
+    /// appended while we were draining. Only removes the given entries, matched by
+    /// (eventName, timestamp).
+    private func remove(_ triggers: [PendingTrigger]) {
         let current = store.load()
         let remaining = current.filter { candidate in
-            !processed.contains { $0.eventName == candidate.eventName && $0.timestamp == candidate.timestamp }
+            !triggers.contains { $0.eventName == candidate.eventName && $0.timestamp == candidate.timestamp }
         }
         store.save(remaining)
-        logger.debug("removed \(current.count - remaining.count) processed trigger(s); \(remaining.count) remaining")
+        logger.debug("removed \(current.count - remaining.count) trigger(s); \(remaining.count) remaining")
     }
 }
