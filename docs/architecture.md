@@ -19,49 +19,37 @@ Global auth state and the current user are held in `AppState`, which is injected
 
 ## Folder Structure
 
-Implemented structure (as of Phase 1):
+As of the 2026-11-14 PR stack. Filesystem-synchronized folders mean new files are picked up by their target automatically.
 
 ```
 Nudge/
-  Core/
-    AppState.swift          # Global auth state, session listener
-    RootView.swift          # Root gating view (loading → onboarding → main app)
-    SupabaseClient.swift    # Supabase client singleton
-  Features/
-    Auth/
-      AuthView.swift              # Sign in / sign up (email + Apple)
-      OnboardingCoordinator.swift # Drives the full onboarding sequence
-      OnboardingTourView.swift    # Feature tour slides
-      PermissionsView.swift       # Screen Time + notification permission prompts
-      ProfileSetupView.swift      # Name collection after sign up
-    Dashboard/
-    Goals/
-    Apps/
-    Social/
-      SocialView.swift            # Friends list, AddFriendSheet, NudgeHistoryView, NudgeHistoryRow
-      SocialViewModel.swift       # Loads/deletes friends; two-init pattern for testability
-    Settings/
-  Models/
-    AppUsage.swift          # AppUsage, AppRecord, AppUsageWithName, AppCategory, AppCategoryMember
-    Goal.swift              # Goal, GoalInsert, GoalWithProgress, GoalType, GoalFrequency, GoalTarget
-    Social.swift            # Friend, FriendInsert, Nudge, FriendStatus, NudgeType, NudgeStatus
-  Services/
-    AuthService.swift       # Supabase auth calls (sign up, sign in, Apple, profile patch)
-    FriendService.swift     # fetch/add/delete/update friend; fetch nudge history
-    NudgeService.swift      # sendNudge(friendId:report:) — calls send-nudge Edge Function
-    UsageService            # (Phase 1/2 — DeviceActivity + Supabase sync)
-    GoalService             # (Phase 3)
-    NotificationService     # (Phase 4)
-    DeviceTokenService      # (Phase 5F — store APNs device token in device_tokens table)
+  Nudge/                      # main app target
+    Core/                     # AppState, RootView, SupabaseClient, AppDelegate (APNs),
+                              # PushRouter / PushTokenManager, AuthDeepLink, Validation, Color+Hex
+    Features/
+      Auth/                   # AuthView, onboarding, PermissionsView, ForgotPassword / SetNewPassword
+      Dashboard/              # DashboardView (hosts DeviceActivityReport), DashboardAvailability
+      Goals/                  # GoalsView/VM, AddGoalSheet/VM, GoalDetailView, GoalRules,
+                              # why-reminder section + editor (Phase 4)
+      Categories/             # CategoriesView/VM, CategoryEditorSheet/VM, CategoryRules
+      Social/                 # SocialView/VM, NudgeHistoryViewModel (realtime)
+      Settings/               # SettingsView/VM, Nudges section (5E), Notifications section, account deletion
+      Shared/                 # CountryPhoneField, ScreenTimeAccessRequiredView
+    Models/                   # Goal, Social, Profile, NudgeSettings, WhyReminder, DeviceToken
+    Services/                 # Auth, Goal, Category, Friend, Nudge, NudgeTrigger, MonitoringRegistration,
+                              # DeviceToken, NudgeRealtime, NudgeSettings, Reminder, Account, AccountCleanup
+  Shared/                     # compiled into the app AND both extensions (ADR-056/069)
+                              # MonitoringPlan, MonitoringEvents, ThresholdRouter, GoalProgressStore,
+                              # SelectionCodec, AppGroupKeys, MonitoringModels, NudgeMessages,
+                              # NudgeTriggerSettings, DailyReport, PendingTriggerQueue, WhyReminderStore,
+                              # UsageSummary, GoalUsage, DurationFormatting, ReportContext (not in monitor)
+  NudgeActivityMonitor/       # DeviceActivityMonitor extension — thresholds, re-arm, notifications, queue
+  NudgeActivityReport/        # DeviceActivityReport extension — dashboard + goalUsage scenes (display only)
+  NudgeTests/                 # Swift Testing suites
+design/app-icon/              # icon concepts + CoreGraphics render script
+supabase/                     # schema.sql, migrations/, functions/ (send-consent, send-nudge,
+                              # receive-reply, delete-account)
 ```
-
-Future targets (not yet added):
-```
-  Extensions/             # DeviceActivityReport extension (Phase 1)
-  Widgets/                # WidgetKit extension (Phase 7)
-```
-
----
 
 ## Key Architectural Decisions
 
@@ -86,14 +74,16 @@ Supabase credentials are stored in `Config.xcconfig` (gitignored) and exposed to
 | Auth session + current user | `AppState` | `@EnvironmentObject` from `NudgeApp` |
 | Onboarding completion | `@AppStorage("onboardingComplete")` | Persisted via UserDefaults |
 | Feature-level UI state | Per-feature ViewModels (to be added) | `@StateObject` / `@ObservedObject` |
-| Real-time nudge status | Supabase Realtime subscription on `nudge` table | Phase 5G — not yet implemented |
+| Real-time nudge status | Supabase Realtime subscription on `nudge` (per history screen) | `NudgeHistoryViewModel` (ADR-068) |
+| Monitoring + extension shared state | App Group `group.com.joshuaqn.Nudge` (goal catalog, progress, settings, whys, trigger queue) | `Shared/` types (see `AppGroupKeys`) |
+| Push deep link | `PushRouter` owned by `AppDelegate` | `@EnvironmentObject` |
 
 ---
 
 ## Navigation
 
 - **Root**: `RootView` switches between onboarding and main app based on auth + onboarding state
-- **Main app**: Tab-based (`TabView`) with 5 tabs: Dashboard, Apps, Goals, Friends, Settings
+- **Main app**: Tab-based (`TabView`) with 5 tabs: Dashboard, Categories, Goals, Friends, Settings (selection is state-driven so push taps can switch to Friends)
 - **Onboarding**: Linear step-based flow driven by `OnboardingCoordinator` (no NavigationStack — steps swap in place)
 - **Modals/sheets**: Handled per-feature (TBD as features are built)
 
@@ -103,7 +93,7 @@ Supabase credentials are stored in `Config.xcconfig` (gitignored) and exposed to
 
 | | |
 |---|---|
-| Minimum deployment target | iOS 17 |
+| Minimum deployment target | iOS 17.6 (project setting) |
 | Primary language | Swift |
 | UI framework | SwiftUI |
 
@@ -125,10 +115,10 @@ Products linked: `Supabase`, `Auth`, `Realtime`
 
 ## Extension Targets
 
-| Target | Purpose | Phase | Status |
-|---|---|---|---|
-| DeviceActivityReport extension | Render usage data from Apple's APIs | 1 | Not yet created |
-| DeviceActivityMonitor extension | Respond to usage threshold events | 4 | Not yet created |
-| WidgetKit extension | Home/lock screen widgets | 7 | Not yet created |
+| Target | Purpose | Status |
+|---|---|---|
+| `NudgeActivityMonitor` | Threshold callbacks: milestones → progress/whys/limit notification, session timeout, daily-report totals; daily re-arm; Strategy 2 trigger queue | Built |
+| `NudgeActivityReport` | Renders Screen Time data (Dashboard, per-goal exact usage). Sandboxed, display-only (ADR-049) | Built |
+| WidgetKit | Home/lock screen widgets | Backlog |
 
-All extension targets must share an App Group with the main app to communicate via UserDefaults or the file system. App Group ID to be defined when first extension is created.
+All targets share the App Group `group.com.joshuaqn.Nudge` and Family Controls entitlements.
