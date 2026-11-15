@@ -17,6 +17,7 @@ struct SettingsView: View {
             Form {
                 accountSection
                 profileSection
+                NotificationSettingsSection()
                 deleteAccountSection
             }
             // Nothing else may run (sign out, save) while the account is being deleted.

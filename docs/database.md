@@ -143,13 +143,27 @@ Time limit goals per app or category.
 **On `temporary`:** When `true`, the goal is monitored only on local days between `startDate` and `endDate` (inclusive); the filter runs on-device in `MonitoringPlan` so the extension applies it at midnight without the app.
 
 ### `why_reminder`
-Motivational reminders sent as notifications to help users stay intentional. Not tied to specific goals — a random or round-robin active reminder is selected when sending a notification.
+A user's personal reason ("why") attached to one goal (Phase 4, migration 007). When the goal
+reaches `notifyPercent` of its limit, the monitor extension shows the message in a local
+notification; several whys at the same (goal, percent) rotate round-robin.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | bigint | PK |
 | userId | uuid | FK → auth.users(id) |
-| message | varchar | The reminder text |
+| goalId | bigint | FK → goal(id), `on delete cascade`, NOT NULL. Index `why_reminder_goal_idx`. |
+| message | varchar(500) | The reminder text. Non-blank (`why_reminder_message_not_blank`, migration 005). |
+| notifyPercent | int | NOT NULL, default 80. `why_reminder_percent_step`: 10–100 in steps of 10 (matches the `goal.<id>.p<NN>` milestones). |
+
+**RLS (migration 007):** separate select / insert / update / delete own-row policies. Insert
+and update `with check` also require the referenced goal to belong to the caller. Clients may
+UPDATE only `message` and `notify_percent` (column-level grant).
+
+**Delivery (not stored here):** the app mirrors every reminder into the App Group as
+`nudge.reminders.byGoal` (`{goalId: {percent: [message]}}`, ordered by id) on each foreground
+and after each edit; the extension keeps its rotation in `nudge.reminders.rr`. Neither key is
+part of the monitoring signature, so editing a why never re-registers monitoring. Both are
+cleared on sign-out.
 
 ### `friend`
 Stores the app user's contacts. Friends do not need a Supabase account or the app installed.

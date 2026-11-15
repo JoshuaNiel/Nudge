@@ -158,5 +158,7 @@ class AppState: ObservableObject {
         defaults?.removeObject(forKey: AppGroupKeys.userFirstName)
         defaults?.removeObject(forKey: AppGroupKeys.friendsAccepted)
         defaults?.removeObject(forKey: AppGroupKeys.goalsActive)
+        // Why-reminders and their rotation are the signed-out user's personal text.
+        if let defaults { WhyReminderStore(defaults: defaults).clear() }
     }
 }
