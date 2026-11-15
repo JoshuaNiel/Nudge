@@ -3,7 +3,7 @@ import Foundation
 /// What the monitor extension should do for a threshold callback, after the progress
 /// and dedup bookkeeping has been applied.
 enum ThresholdOutcome: Equatable {
-    /// p10–p90: progress recorded; no user-facing side effect yet (Phase 4 adds why-reminders).
+    /// p10–p90: progress recorded; the extension shows a why-reminder if one exists (Phase 4).
     case milestone(goal: GoalSummary, percent: Int)
     /// p100: the goal's limit was reached.
     case goalReached(goal: GoalSummary)

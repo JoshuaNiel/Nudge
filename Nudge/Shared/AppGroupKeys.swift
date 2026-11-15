@@ -58,6 +58,16 @@ enum AppGroupKeys {
     /// JSON `[eventName]` of milestone/session events whose side effects already ran on
     /// `day`. Read and written by the monitor extension only.
     static func firedKey(day: String) -> String { firedKeyPrefix + day }
+
+    // MARK: - Why-reminders (main app → monitor extension), Phase 4
+    /// JSON `{"<goalId>": {"<percent>": [message]}}`. Written by the main app on every
+    /// foreground (after a successful fetch) and after every reminder edit. Deliberately
+    /// **not** part of the monitoring signature: editing a why never re-registers.
+    static let remindersByGoal = "nudge.reminders.byGoal"
+
+    /// JSON `{"<goalId>.<percent>": nextIndex}` — round-robin position per (goal,
+    /// percent). Read and written by the monitor extension only.
+    static let remindersRoundRobin = "nudge.reminders.rr"
 }
 
 // MARK: - Background Task Identifiers

@@ -59,6 +59,13 @@ enum NudgeMessages {
         "You set a \(limitSeconds.formattedDuration) daily limit on \(label)."
     }
 
+    // MARK: - Why-reminder (local notification at a why's percent, Phase 4)
+
+    /// Title for a p10–p90 why-reminder. The body is the user's own why.
+    static func milestoneReminderTitle(percent: Int, label: String) -> String {
+        "You're at \(percent)% of your \(label) limit"
+    }
+
     // MARK: - Convenience: compose from GoalSummary
 
     /// Returns the SMS report for the goal (or session timeout) that just fired.

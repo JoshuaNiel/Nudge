@@ -1,10 +1,14 @@
 import SwiftUI
 import DeviceActivity
 import FamilyControls
+import Supabase // `User.id` (Auth module) on `appState.currentUser`
 
 /// Goal detail (G8): exact usage today, drawn by the report extension's `goalUsage`
-/// scene, with the limit, the 10%-step milestone bar, the temporary range and Delete
-/// drawn here around it.
+/// scene, with the limit, the 10%-step milestone bar, the temporary range, the goal's
+/// whys (Phase 4) and Delete drawn here around it.
+///
+/// A `List` (not a `ScrollView`) so the whys get native swipe-to-delete. The Phase 3b
+/// cards keep their own look: each sits in a section with a clear, inset-free row.
 struct GoalDetailView: View {
     // Callbacks
     let item: GoalListItem
@@ -12,31 +16,56 @@ struct GoalDetailView: View {
     var onDelete: () -> Void
 
     // Environment
+    @EnvironmentObject private var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
 
     // Local state
     /// Changing this relaunches the report extension with fresh data.
     @State private var refreshId = UUID()
     @State private var showDeleteConfirmation = false
+    @StateObject private var whyViewModel: WhyRemindersViewModel
+    @State private var whyEditor: WhyEditor? = nil
+
+    private enum WhyEditor: Identifiable {
+        case add
+        case edit(WhyReminder)
+
+        var id: String {
+            switch self {
+            case .add: return "add"
+            case .edit(let reminder): return "edit-\(reminder.id)"
+            }
+        }
+    }
+
+    init(item: GoalListItem, onReselect: @escaping () -> Void, onDelete: @escaping () -> Void) {
+        self.item = item
+        self.onReselect = onReselect
+        self.onDelete = onDelete
+        _whyViewModel = StateObject(wrappedValue: WhyRemindersViewModel(goalId: item.id))
+    }
 
     /// A real, fixed frame: a zero-size report never launches the extension (ADR-044),
     /// and the host cannot size a remote view to its content.
     private static let reportHeight: CGFloat = 110
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                header
-                if item.status != .active { statusBanner }
-                usageCard
-                detailsCard
-                deleteButton
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
-            .padding(.bottom, 40)
+        List {
+            cardSection { header }
+            if item.status != .active { cardSection { statusBanner } }
+            cardSection { usageCard }
+            cardSection { detailsCard }
+            WhyRemindersSection(
+                viewModel: whyViewModel,
+                onAdd: { whyEditor = .add },
+                onEdit: { whyEditor = .edit($0) },
+                onDelete: deleteWhy,
+                onRetry: reloadWhys
+            )
+            cardSection { deleteButton }
         }
-        .background(Color(.systemGroupedBackground))
+        .listStyle(.insetGrouped)
+        .listSectionSpacing(20)
         .navigationTitle(item.title)
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("Delete this goal?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
@@ -46,6 +75,48 @@ struct GoalDetailView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active { refreshId = UUID() }
+        }
+        .sheet(item: $whyEditor) { editor in
+            whyEditorSheet(editor)
+        }
+        .task { await loadWhys() }
+    }
+
+    // MARK: - Layout
+
+    /// One Phase 3b card as its own list section, drawn edge to edge with its own
+    /// background and corner radius.
+    private func cardSection<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        Section {
+            content()
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+        }
+    }
+
+    @ViewBuilder
+    private func whyEditorSheet(_ editor: WhyEditor) -> some View {
+        switch editor {
+        case .add:
+            WhyReminderEditorSheet(
+                existing: nil,
+                goalTitle: item.title,
+                onSave: { message, percent in
+                    guard let userId = appState.currentUser?.id else { return Self.signedOutMessage }
+                    return await whyViewModel.add(userId: userId, message: message, percent: percent)
+                },
+                onCompleted: { whyEditor = nil }
+            )
+        case .edit(let reminder):
+            WhyReminderEditorSheet(
+                existing: reminder,
+                goalTitle: item.title,
+                onSave: { message, percent in
+                    guard let userId = appState.currentUser?.id else { return Self.signedOutMessage }
+                    return await whyViewModel.update(reminder, userId: userId, message: message, percent: percent)
+                },
+                onCompleted: { whyEditor = nil }
+            )
         }
     }
 
@@ -154,6 +225,24 @@ struct GoalDetailView: View {
 }
 
 extension GoalDetailView {
+    // MARK: - Whys
+
+    private static let signedOutMessage = "You're signed out. Sign in and try again."
+
+    private func loadWhys() async {
+        guard let userId = appState.currentUser?.id else { return }
+        await whyViewModel.load(userId: userId)
+    }
+
+    private func reloadWhys() {
+        Task { await loadWhys() }
+    }
+
+    private func deleteWhy(_ reminder: WhyReminder) {
+        guard let userId = appState.currentUser?.id else { return }
+        Task { await whyViewModel.delete(reminder, userId: userId) }
+    }
+
     // MARK: - Report filter
 
     /// Today for the goal's tokens; total goals pass no tokens (= all usage). `nil` when

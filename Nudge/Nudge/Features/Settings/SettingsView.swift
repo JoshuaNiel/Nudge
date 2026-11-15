@@ -16,6 +16,7 @@ struct SettingsView: View {
             Form {
                 accountSection
                 profileSection
+                NotificationSettingsSection()
             }
             .navigationTitle("Settings")
             .scrollDismissesKeyboard(.interactively)
