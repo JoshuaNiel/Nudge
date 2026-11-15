@@ -320,3 +320,71 @@ extension's idea of what is monitored would silently disarm monitoring, which is
 the failure class ADR-054 exists to prevent. Supersedes the "Extension shared types"
 backlog item. A shared framework target is still an option later; a synchronized folder
 achieves the same de-duplication with no new target or linkage.
+
+---
+
+## Goals, Notifications, Social and Account (2026-11-14)
+
+These decisions come from the approved v2 specs (`docs/specs/phase-3-goals.md`,
+`phase-4-notifications.md`, `phase-5e-trigger-settings.md`, `auth-recovery.md`,
+`account-deletion.md`). Each spec's "implementation notes" section has the details.
+
+### ADR-057: Goal targets are stored as `FamilyActivitySelection` tokens; app goals carry a user-typed label
+**Decision:** App goals store a base64 PropertyList `FamilyActivitySelection` holding exactly one application token, in `goal.selection`. Categories store theirs in `app_category.selection` (at least one app or Apple-category token). App goals also need a user-typed `goal.label` (e.g. "Instagram"). `goal.bundle_id`, the `app` table and `app_category_member` are deprecated and unused. The duplicate-app-goal unique index is keyed on `md5(selection)`.
+**Why:** `DeviceActivityEvent` only accepts opaque tokens (ADR-042). Neither the main app nor the monitor extension can turn a token into a name. Only `Label(token)` inside a SwiftUI view can display one, and SMS copy needs a plain string. Storing selections server-side means they survive a reinstall. Supersedes ADR-006/009 for app and category targets.
+
+### ADR-058: Goal progress comes from 10% milestone events recorded in the App Group, with a once-per-day dedup
+**Decision:** Each monitored goal registers events `goal.<id>.p10` … `p100`. When one fires, the monitor extension records the highest percent per day (`nudge.progress.<day>`) and marks the event as fired (`nudge.fired.<day>`), so each milestone's side effects run at most once per day. p100 triggers the "limit reached" notification and, if enabled, the goal-breach nudge. A pure `ThresholdRouter` (Shared, unit-tested) decides what each callback means; the extension only carries out the side effects. Supersedes ADR-036's naming for goals; `session.timeout` is unchanged.
+**Why:** No Nudge code outside the report extension can read usage (ADR-049). Milestone thresholds are the only usage signal the extension receives, and the extension can persist it. The dedup is what makes mid-day re-registration safe, because restarting monitoring can make thresholds fire again.
+
+### ADR-059: The App Group holds the full goal catalog; each registration filters it to "active today"
+**Decision:** `nudge.goals.active` holds every goal plus the session-timeout pseudo-goal, unfiltered. `MonitoringPlan` filters it to daily goals active today, including temporary goals by date range. The signature is versioned (`v2;`) and includes a SHA-256 of each selection, so editing a category's apps re-registers.
+**Why:** The extension's midnight re-arm (ADR-054) runs with the app closed. If the App Group held only today's set, a temporary goal could never start on its first day.
+
+### ADR-060: Daily goals only for now; weekly planned as a separate activity; monthly is out
+**Decision:** Phase 3 ships daily goals only. Weekly goals will use a second repeating activity (`nudge.weekly`) with its own re-arm (spec drafted, awaiting confirmation). Monthly goals are not feasible.
+**Why:** Thresholds accumulate within a single monitoring interval, and iOS rejects intervals longer than a week (`MonitoringError.intervalTooLong`).
+
+### ADR-061: Exact usage is only ever rendered by the report extension
+**Decision:** The Goals list shows approximate progress in 10% steps (ADR-058). Goal detail embeds a second report scene, `goalUsage`, filtered to the goal's tokens, which draws the exact minutes. The Dashboard does the same for whole days. Dashboard refresh is a toolbar button plus refresh on foreground, not pull-to-refresh.
+**Why:** ADR-049. Touches inside the report's remote view never reach a host scroll view, so `.refreshable` wouldn't work.
+
+### ADR-062: Nudge trigger settings live in a separate `nudge_settings` table; the extension fails closed
+**Decision:** The table has one row per user (session timeout on/minutes, goal breach, daily report on/time). No row means the defaults. The extension reads a copy from the App Group (`nudge.settings`). If that copy is missing or can't be decoded, goal-breach nudges are treated as **off**. A failed settings fetch never re-registers (ADR-055). `profile.session_timeout_minutes` is deprecated.
+**Why:** A separate table lets per-friend trigger configuration be added later without reshaping `profile` (backlog). Failing closed means friends are never texted because of corrupt state.
+
+### ADR-063: The daily report is total-only and approximate, delivered "at or after" the chosen time
+**Decision:** When the report is enabled, `total.m<NN>` events fire every 15 minutes up to 12 h. The extension records the highest one per day. At midnight it queues a `daily.report` `PendingTrigger` for yesterday with `notBefore` set to the chosen time. The app sends it at or after that time, through the Strategy 2 drain.
+**Why:** Per-app numbers never leave the report extension (ADR-049), and nothing can wake the app at an exact time.
+
+### ADR-064: Why-reminders fire at a percentage of their goal, not on a schedule
+**Decision:** `why_reminder` rows belong to a goal (`goal_id`, cascade) and have a `notify_percent` from 10 to 100 in steps of 10. The extension posts the why when that milestone fires, rotating round-robin when several whys share a percent. At 100% the why becomes the body of the limit notification, so the user gets one notification, not two. The why list reaches the extension via the App Group and is not part of the monitoring signature. The time-based schedule and the unlock prompt are dropped.
+**Why:** The user decided this on 2026-11-14. Using the existing 10% milestones means no extra events are needed, and editing a why never resets monitoring.
+
+### ADR-065: APNs token lifecycle
+**Decision:** The device token is stored on the device. It's upserted to `device_tokens` on `(user_id, token)` whenever a user is signed in, and this device's row is deleted on sign-out before the session is cleared (best-effort, 5 s cap). The app re-registers on every foreground when notifications are authorized, and never prompts outside onboarding. Reply pushes carry `nudge_id` and deep-link to that friend's history. Dev builds need the `APNS_SANDBOX=true` function secret.
+**Why:** A signed-out device shouldn't receive another user's replies, and RLS only allows the delete while the user's JWT is still valid.
+
+### ADR-066: Auth email links use the `nudge://` scheme with PKCE pinned
+**Decision:** Password reset uses `nudge://reset-password` and sign-up confirmation uses `nudge://auth-callback`. `flowType: .pkce` is set explicitly. The forgot-password flow shows a neutral message, so it never reveals whether an account exists. Recovery UI is presented at the app level, above `RootView`.
+**Why:** Any app can register a custom scheme. With PKCE the link carries only a one-time code, which is useless without the verifier this device stored.
+
+### ADR-067: Account deletion through a `delete-account` Edge Function
+**Decision:** POST only, with the caller's JWT, deployed `--no-verify-jwt` and checked in-function with `getUser` (same pattern as ADR-050). It reads no parameters and hard-deletes that one auth user; every user table deletes along with it. The app wipes local state (monitoring, App Group, onboarding flag, local sign-out) only after the server confirms success.
+**Why:** App Store guideline 5.1.1(v), done without ever accepting a target user id from the client.
+
+### ADR-068: Live nudge status uses Supabase Realtime under the existing RLS
+**Decision:** `public.nudge` is added to the `supabase_realtime` publication (migration 006b). The history screen subscribes to INSERT/UPDATE filtered by `friend_id` while it's visible, with a unique channel per screen that's removed on teardown, and refetches after every (re)subscribe.
+**Why:** Realtime applies the table's select policy to each subscriber, so no policy is widened.
+
+### ADR-069: Shared code is compiled into all three targets, with per-target exceptions
+**Decision:** `Shared/` is now also part of `NudgeActivityReport`. `ReportContext.swift` is excluded from the monitor target so the memory-limited monitor extension doesn't link SwiftUI. Pure logic (usage aggregation, milestones, routing, settings, whys) lives in `Shared/` so the tests can cover it. Extends ADR-056.
+
+### Notes on earlier ADRs
+- **ADR-035:** the debounce is now 1.5 s as decided, and `goalDidChange()` is called by the Goals, Categories and Settings screens.
+- **ADR-044, ADR-047:** historical. The hidden capture `DeviceActivityReport` and `UsageSyncService` are gone.
+- **ADR-041:** "top 3 apps in daily report" is superseded by ADR-063. The report is total-only: "Josh's screen time yesterday: about 3h 15m."
+- **ADR-063, details:**
+  - **Toggle source:** the report toggle is read from the App Group by every registration path, so the app and the extension always compute the same signature. If they computed different ones, each would keep re-registering after the other and reset the day's counters.
+  - **Expiry:** a queued report is dropped once the day it was due has ended.
+  - **Catch-up:** a mid-day `intervalDidStart` queues a report that was missed.
