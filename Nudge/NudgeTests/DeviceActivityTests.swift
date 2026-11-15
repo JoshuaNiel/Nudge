@@ -114,39 +114,7 @@ struct NudgeMessagesTests {
         #expect(msg == "Lee has been on their phone for 45 minutes.")
     }
 
-    @Test func dailyReportWithApps() {
-        let msg = NudgeMessages.dailyReport(
-            userName: "Josh",
-            totalSeconds: 7200,
-            topApps: [
-                (name: "Instagram", seconds: 3600),
-                (name: "Safari", seconds: 1800),
-                (name: "YouTube", seconds: 900)
-            ]
-        )
-        #expect(msg.contains("Josh"))
-        #expect(msg.contains("2h"))
-        #expect(msg.contains("Instagram"))
-        #expect(msg.contains("Safari"))
-        #expect(msg.contains("YouTube"))
-    }
-
-    @Test func dailyReportOnlyTopThree() {
-        let topApps = [
-            (name: "App1", seconds: 4000),
-            (name: "App2", seconds: 3000),
-            (name: "App3", seconds: 2000),
-            (name: "App4", seconds: 1000),
-        ]
-        let msg = NudgeMessages.dailyReport(userName: "Josh", totalSeconds: 10000, topApps: topApps)
-        #expect(!msg.contains("App4"), "Should only show top 3 apps")
-    }
-
-    @Test func dailyReportEmpty() {
-        let msg = NudgeMessages.dailyReport(userName: "Josh", totalSeconds: 0, topApps: [])
-        #expect(msg.contains("Josh"))
-        #expect(!msg.contains("Top apps"))
-    }
+    // Daily report copy: see DailyReportTests.swift (Phase 5E-2).
 
     @Test func reportForGoalApp() {
         let summary = GoalSummary(

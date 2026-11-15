@@ -37,7 +37,8 @@ enum MonitoringPlan {
     static let activityName = DeviceActivityName("nudge.daily")
 
     /// Apple does not document a hard cap on events per activity. Each goal costs 10
-    /// events, so warn well before a plausible limit to make a silent failure visible.
+    /// events, the session timeout 1 and the daily report 48 (Phase 5E-2), so warn well
+    /// before a plausible limit to make a silent failure visible.
     static let eventCountWarningThreshold = 200
 
     private static let logger = Logger(subsystem: "com.joshuaqn.Nudge", category: "MonitoringPlan")
@@ -136,10 +137,39 @@ enum MonitoringPlan {
                 )
             }
         }
+        return events
+    }
+
+    /// The full event set for one registration: the active goals' events plus, when the
+    /// daily report is on, the 48 `total.m<NN>` total-usage milestones (no app filter).
+    static func registrationEvents(
+        for active: [GoalSummary],
+        dailyReportEnabled: Bool
+    ) -> [DeviceActivityEvent.Name: DeviceActivityEvent] {
+        var events = events(for: active)
+        if dailyReportEnabled {
+            for spec in dailyTotalEventSpecs {
+                // Empty token sets = all device usage, like a total goal.
+                events[DeviceActivityEvent.Name(spec.name)] = DeviceActivityEvent(
+                    applications: [],
+                    categories: [],
+                    webDomains: [],
+                    threshold: thresholdComponents(spec.thresholdSeconds)
+                )
+            }
+        }
         if events.count > eventCountWarningThreshold {
             logger.warning("registering \(events.count) events — above the \(eventCountWarningThreshold) warning threshold")
         }
         return events
+    }
+
+    /// Whether the registration should include the daily-report events. Read from the
+    /// App Group by **every** registration path (app and extension), so the two can never
+    /// compute different signatures for the same state and re-register each other in turn.
+    /// Missing or undecodable settings read as off (`NudgeTriggerSettings.failClosed`).
+    static func isDailyReportEnabled(defaults: UserDefaults?) -> Bool {
+        NudgeTriggerSettings.load(from: defaults).dailyReportEnabled
     }
 
     private struct TokenFilter {
@@ -207,6 +237,30 @@ enum MonitoringPlan {
         return ([signatureVersion] + entries).joined(separator: ";")
     }
 
+    /// The signature stamped by `register`: the goal signature, plus a daily-total entry
+    /// when the report is on. Toggling the report therefore re-registers, while changing
+    /// only the report time does not (the time is not part of what is registered). With
+    /// the report off it equals `signature(for:)`, so upgraded installs do not re-register.
+    static func registrationSignature(for active: [GoalSummary], dailyReportEnabled: Bool) -> String {
+        let base = signature(for: active)
+        guard dailyReportEnabled else { return base }
+        return base + ";" + "\(dailyTotalEventName(minutes: dailyTotalStepMinutes))|\(dailyTotalStepMinutes)|\(dailyTotalMaxMinutes)"
+    }
+
+    /// `registrationSignature` for today's active subset of `catalog`, with the report
+    /// toggle read from `defaults`. The one helper every staleness check uses.
+    static func registrationSignature(
+        catalog: [GoalSummary],
+        defaults: UserDefaults?,
+        now: Date,
+        calendar: Calendar
+    ) -> String {
+        registrationSignature(
+            for: activeSummaries(in: catalog, now: now, calendar: calendar),
+            dailyReportEnabled: isDailyReportEnabled(defaults: defaults)
+        )
+    }
+
     /// SHA-256 hex of the stored selection bytes, or "-" when there is none. Hashes the
     /// persisted bytes rather than re-encoding the selection, because encoding a `Set`
     /// is not byte-stable across launches.
@@ -258,15 +312,6 @@ enum MonitoringPlan {
 
     // MARK: - App Group persistence
 
-    /// Reads the Strategy 2 queue the extension writes and the main app drains.
-    static func loadPendingTriggers(from defaults: UserDefaults?) -> [PendingTrigger] {
-        guard let data = defaults?.data(forKey: AppGroupKeys.triggersPending),
-              let triggers = try? JSONDecoder().decode([PendingTrigger].self, from: data) else {
-            return []
-        }
-        return triggers
-    }
-
     /// Reads the persisted catalog (unfiltered).
     static func loadSummaries(from defaults: UserDefaults?) -> [GoalSummary] {
         guard let data = defaults?.data(forKey: AppGroupKeys.goalsActive),
@@ -297,6 +342,10 @@ enum MonitoringPlan {
     /// `catalog`, persists the full catalog to the App Group for the extension, and
     /// records the day/signature stamps. Returns the number of events registered.
     ///
+    /// The daily-report events are included when the report is on in the App Group
+    /// settings (`isDailyReportEnabled`), so the extension's midnight re-arm gets them
+    /// right with the app closed.
+    ///
     /// **Stamps are written before `startMonitoring` runs, deliberately.** Restarting
     /// monitoring while its interval is active provokes another `intervalDidStart`,
     /// and the extension re-registers from that callback — so a stamp written
@@ -311,12 +360,16 @@ enum MonitoringPlan {
         startMonitoring: (DeviceActivitySchedule, [DeviceActivityEvent.Name: DeviceActivityEvent]) throws -> Void
     ) throws -> Int {
         let active = activeSummaries(in: catalog, now: now, calendar: calendar)
-        let events = events(for: active)
+        let dailyReportEnabled = isDailyReportEnabled(defaults: defaults)
+        let events = registrationEvents(for: active, dailyReportEnabled: dailyReportEnabled)
         let previousDay = defaults?.string(forKey: AppGroupKeys.lastRegisteredDay)
         let previousSignature = defaults?.string(forKey: AppGroupKeys.lastRegisteredSignature)
 
         defaults?.set(dayStamp(for: now, calendar: calendar), forKey: AppGroupKeys.lastRegisteredDay)
-        defaults?.set(signature(for: active), forKey: AppGroupKeys.lastRegisteredSignature)
+        defaults?.set(
+            registrationSignature(for: active, dailyReportEnabled: dailyReportEnabled),
+            forKey: AppGroupKeys.lastRegisteredSignature
+        )
 
         do {
             try startMonitoring(schedule(), events)
@@ -328,7 +381,7 @@ enum MonitoringPlan {
 
         persistCatalog(catalog, defaults: defaults)
 
-        logger.log("registered monitoring — \(events.count) event(s), \(active.count) active of \(catalog.count) in catalog")
+        logger.log("registered monitoring — \(events.count) event(s), \(active.count) active of \(catalog.count) in catalog, daily report: \(dailyReportEnabled)")
         return events.count
     }
 
@@ -349,8 +402,8 @@ enum MonitoringPlan {
 
     /// Re-registers from the App Group catalog, but only when `isRegistrationStale` says
     /// it is needed. This is the path the monitor extension uses: it runs with no main
-    /// app process and no network, so the last catalog the app persisted is the best
-    /// available source of truth.
+    /// app process and no network, so the last catalog and settings the app persisted are
+    /// the best available source of truth.
     @discardableResult
     static func reregisterFromAppGroupIfNeeded(
         center: DeviceActivityCenter,
@@ -358,24 +411,37 @@ enum MonitoringPlan {
         now: Date,
         calendar: Calendar
     ) -> Bool {
+        reregisterFromAppGroupIfNeeded(defaults: defaults, now: now, calendar: calendar) { schedule, events in
+            center.stopMonitoring([activityName])
+            try center.startMonitoring(activityName, during: schedule, events: events)
+        }
+    }
+
+    /// Testable core of the extension re-arm. An empty catalog is skipped (nothing the
+    /// app wrote to arm) unless the daily report is on, which needs no goals.
+    @discardableResult
+    static func reregisterFromAppGroupIfNeeded(
+        defaults: UserDefaults?,
+        now: Date,
+        calendar: Calendar,
+        startMonitoring: (DeviceActivitySchedule, [DeviceActivityEvent.Name: DeviceActivityEvent]) throws -> Void
+    ) -> Bool {
         let catalog = loadSummaries(from: defaults)
-        guard !catalog.isEmpty else {
-            logger.error("no goal summaries in App Group — skipping re-registration")
+        guard !catalog.isEmpty || isDailyReportEnabled(defaults: defaults) else {
+            logger.error("no goal summaries in App Group and daily report off — skipping re-registration")
             return false
         }
 
-        let today = dayStamp(for: now, calendar: calendar)
-        let sig = signature(for: activeSummaries(in: catalog, now: now, calendar: calendar))
         let stale = isRegistrationStale(
             lastDay: defaults?.string(forKey: AppGroupKeys.lastRegisteredDay),
             lastSignature: defaults?.string(forKey: AppGroupKeys.lastRegisteredSignature),
-            today: today,
-            signature: sig
+            today: dayStamp(for: now, calendar: calendar),
+            signature: registrationSignature(catalog: catalog, defaults: defaults, now: now, calendar: calendar)
         )
         guard stale else { return false }
 
         do {
-            try register(catalog: catalog, center: center, defaults: defaults, now: now, calendar: calendar)
+            try register(catalog: catalog, defaults: defaults, now: now, calendar: calendar, startMonitoring: startMonitoring)
             return true
         } catch {
             logger.error("re-registration failed: \(error.localizedDescription, privacy: .public)")

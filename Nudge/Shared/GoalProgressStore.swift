@@ -8,6 +8,8 @@ import Foundation
 ///   lower milestones fire again.
 /// - `nudge.fired.<day>` → event names whose side effects already ran that day, so a
 ///   re-registration can never produce a second notification or nudge.
+/// - `nudge.dailyTotal.<day>` → highest `total.m<NN>` minutes reached (Phase 5E-2).
+/// - `nudge.dailyReport.enqueued.<day>` → the report about `day` was queued (Phase 5E-2).
 ///
 /// Everything is keyed by the local calendar day (`MonitoringPlan.dayStamp`). Values are
 /// JSON, like the rest of the App Group. Unreadable values read as empty rather than
@@ -92,11 +94,47 @@ struct GoalProgressStore {
         return Set(names)
     }
 
+    // MARK: - Daily total (Phase 5E-2)
+
+    /// Highest total-usage milestone (minutes) recorded on `day`, or `nil` if none fired.
+    func dailyTotalMinutes(onDay day: String) -> Int? {
+        defaults.object(forKey: AppGroupKeys.dailyTotalKey(day: day)) as? Int
+    }
+
+    /// Max-merge: a re-registration restarts counting and lower milestones fire again,
+    /// so a lower value never overwrites a higher one. Idempotent, so no dedup needed.
+    func recordDailyTotal(minutes: Int, day: String) {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+
+        let current = dailyTotalMinutes(onDay: day) ?? 0
+        guard minutes > current else { return }
+        defaults.set(minutes, forKey: AppGroupKeys.dailyTotalKey(day: day))
+    }
+
+    func isDailyReportEnqueued(forDay day: String) -> Bool {
+        defaults.bool(forKey: AppGroupKeys.dailyReportEnqueuedKey(day: day))
+    }
+
+    /// Test-and-set: returns `true` when this call marked the report about `day` as
+    /// queued, `false` when it already was (caller must not queue another).
+    @discardableResult
+    func markDailyReportEnqueued(forDay day: String) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+
+        guard !isDailyReportEnqueued(forDay: day) else { return false }
+        defaults.set(true, forKey: AppGroupKeys.dailyReportEnqueuedKey(day: day))
+        return true
+    }
+
     // MARK: - Pruning
 
-    /// Removes progress and dedup keys for days more than `retentionDays` before the local
-    /// day of `today` (so today and the two previous days are kept). Malformed keys under
-    /// our prefixes are removed too. Other App Group keys are never touched.
+    /// Removes day-scoped keys (`AppGroupKeys.dayScopedKeyPrefixes`) for days more than
+    /// `retentionDays` before the local day of `today` (so today and the two previous days
+    /// are kept — the midnight daily report reads *yesterday's* total after this runs).
+    /// Malformed keys under our prefixes are removed too. Other App Group keys are never
+    /// touched.
     func prune(keepingDaysFrom today: Date, calendar: Calendar) {
         guard let cutoffDate = calendar.date(byAdding: .day, value: -Self.retentionDays, to: today) else { return }
         let cutoff = MonitoringPlan.dayStamp(for: cutoffDate, calendar: calendar)
@@ -112,9 +150,9 @@ struct GoalProgressStore {
         }
     }
 
-    /// The day suffix of a progress/fired key, or `nil` for any other key.
+    /// The day suffix of a day-scoped key, or `nil` for any other key.
     private static func day(fromKey key: String) -> String? {
-        for prefix in [AppGroupKeys.progressKeyPrefix, AppGroupKeys.firedKeyPrefix] where key.hasPrefix(prefix) {
+        for prefix in AppGroupKeys.dayScopedKeyPrefixes where key.hasPrefix(prefix) {
             return String(key.dropFirst(prefix.count))
         }
         return nil

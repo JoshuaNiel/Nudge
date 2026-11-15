@@ -9,6 +9,8 @@ enum ThresholdOutcome: Equatable {
     case goalReached(goal: GoalSummary)
     /// The session-timeout pseudo-goal fired.
     case sessionTimeout(GoalSummary)
+    /// A `total.m<NN>` milestone: recorded for the daily report; no other side effect.
+    case dailyTotal(minutes: Int)
     /// Already handled today; skip every side effect.
     case duplicate(eventName: String)
     /// The name is unknown, or names a goal missing from the catalog — monitoring and the
@@ -44,6 +46,12 @@ enum ThresholdRouter {
             }
             guard store.markFired(eventName, onDay: day) else { return .duplicate(eventName: eventName) }
             return .sessionTimeout(session)
+
+        case let .dailyTotal(minutes):
+            // Needs no catalog entry. Max-merge is idempotent, so the fired set is not
+            // consulted: there is no side effect to dedup.
+            store.recordDailyTotal(minutes: minutes, day: day)
+            return .dailyTotal(minutes: minutes)
 
         case .unknown:
             return .unmatched(eventName: eventName)

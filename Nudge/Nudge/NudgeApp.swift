@@ -114,6 +114,9 @@ struct NudgeApp: App {
 
                 let service = NudgeTriggerService()
                 await service.drainPendingTriggers(userId: userId)
+                // Again, now that the queue reflects this drain: a deferred daily report
+                // left behind sets the next run's earliestBeginDate.
+                self.scheduleNudgeTriggerProcessing()
                 task.setTaskCompleted(success: true)
             }
 
@@ -123,10 +126,17 @@ struct NudgeApp: App {
         }
     }
 
+    /// Submitting replaces any pending request for the identifier. When everything
+    /// queued is held for later (a daily report's `notBefore`), the task is not started
+    /// before the earliest of those times (Phase 5E-2).
     private func scheduleNudgeTriggerProcessing() {
         let request = BGProcessingTaskRequest(identifier: BGTaskIdentifiers.nudgeTrigger)
         request.requiresNetworkConnectivity = true
         request.requiresExternalPower = false
+        request.earliestBeginDate = PendingTriggerQueue.earliestBeginDate(
+            for: PendingTriggerQueue.load(from: UserDefaults(suiteName: AppGroupKeys.suiteName)),
+            now: Date()
+        )
         do {
             try BGTaskScheduler.shared.submit(request)
         } catch {
