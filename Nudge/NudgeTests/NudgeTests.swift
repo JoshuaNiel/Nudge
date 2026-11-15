@@ -41,60 +41,6 @@ struct FormattedDurationTests {
     }
 }
 
-// MARK: - GoalWithProgress Logic
-
-@Suite("GoalWithProgress")
-@MainActor
-struct GoalWithProgressTests {
-
-    private func makeGoal(limitSeconds: Int) -> Goal {
-        Goal(
-            id: 1,
-            userId: UUID(),
-            limitSeconds: limitSeconds,
-            frequency: .daily,
-            targetType: .total,
-            bundleId: nil,
-            categoryId: nil,
-            temporary: false,
-            startDate: nil,
-            endDate: nil,
-            selection: nil,
-            label: nil
-        )
-    }
-
-    @Test func progressFractionBelowLimit() {
-        let gwp = GoalWithProgress(goal: makeGoal(limitSeconds: 3600), usedSeconds: 1800)
-        #expect(gwp.progressFraction == 0.5)
-        #expect(!gwp.isExceeded)
-    }
-
-    @Test func progressFractionCappedAtOne() {
-        let gwp = GoalWithProgress(goal: makeGoal(limitSeconds: 3600), usedSeconds: 7200)
-        #expect(gwp.progressFraction == 1.0)
-        #expect(gwp.isExceeded)
-    }
-
-    @Test func progressFractionAtExactLimit() {
-        let gwp = GoalWithProgress(goal: makeGoal(limitSeconds: 3600), usedSeconds: 3600)
-        #expect(gwp.progressFraction == 1.0)
-        #expect(gwp.isExceeded)
-    }
-
-    @Test func progressFractionAtZero() {
-        let gwp = GoalWithProgress(goal: makeGoal(limitSeconds: 3600), usedSeconds: 0)
-        #expect(gwp.progressFraction == 0.0)
-        #expect(!gwp.isExceeded)
-    }
-
-    @Test func idMatchesGoalId() {
-        let goal = makeGoal(limitSeconds: 100)
-        let gwp = GoalWithProgress(goal: goal, usedSeconds: 0)
-        #expect(gwp.id == goal.id)
-    }
-}
-
 // MARK: - Goal Model Coding
 
 @Suite("Goal Model Coding")
@@ -230,29 +176,5 @@ struct AppCategoryCodingTests {
         #expect(category.userId == userId)
         #expect(category.name == "Social")
         #expect(category.color == "#FF5733")
-    }
-
-    @Test func appCategoryMemberDecodesFromSnakeCaseJSON() throws {
-        let json = """
-        {
-            "bundle_id": "com.instagram.Instagram",
-            "category_id": 3
-        }
-        """.data(using: .utf8)!
-
-        let member = try decoder.decode(AppCategoryMember.self, from: json)
-        #expect(member.bundleId == "com.instagram.Instagram")
-        #expect(member.categoryId == 3)
-    }
-
-    @Test func appCategoryMemberEncodesSnakeCaseKeys() throws {
-        let member = AppCategoryMember(bundleId: "com.test", categoryId: 7)
-        let data = try encoder.encode(member)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-
-        #expect(json["bundle_id"] != nil)
-        #expect(json["category_id"] != nil)
-        #expect(json["bundleId"] == nil,   "camelCase should not appear")
-        #expect(json["categoryId"] == nil, "camelCase should not appear")
     }
 }

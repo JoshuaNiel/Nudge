@@ -1,94 +1,158 @@
 import SwiftUI
-import Supabase
+import Supabase // `User.id` (Auth module) on `appState.currentUser`
+import FamilyControls
 
 // MARK: - GoalsView
 
+/// Goals tab (Phase 3b): daily goals with 10%-step progress from the monitor extension,
+/// a detail screen with exact usage, and the Add Goal sheet.
 struct GoalsView: View {
+    // Environment
     @EnvironmentObject private var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
+
+    // Local state
     @StateObject private var viewModel = GoalsViewModel()
-    @State private var showAddGoal = false
+    @State private var isAuthorized = DashboardAvailability.isScreenTimeAuthorized()
+    @State private var path: [Int] = []
+    @State private var sheet: GoalsSheet? = nil
+
+    private enum GoalsSheet: Identifiable {
+        case addGoal
+        case reselectApp(goalId: Int, title: String)
+        case editCategory(AppCategory)
+
+        var id: String {
+            switch self {
+            case .addGoal: return "add"
+            case .reselectApp(let goalId, _): return "reselect-\(goalId)"
+            case .editCategory(let category): return "category-\(category.id)"
+            }
+        }
+    }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if viewModel.isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let errorMessage = viewModel.error {
-                    errorView(message: errorMessage)
-                } else if viewModel.goals.isEmpty {
-                    emptyState
-                } else {
-                    goalList
-                }
-            }
-            .navigationTitle("Goals")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showAddGoal = true } label: {
-                        Image(systemName: "plus")
+        NavigationStack(path: $path) {
+            content
+                .navigationTitle("Goals")
+                .toolbar {
+                    if isAuthorized {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button { sheet = .addGoal } label: {
+                                Label("Add Goal", systemImage: "plus")
+                            }
+                        }
                     }
                 }
-            }
-            .sheet(isPresented: $showAddGoal) {
-                AddGoalSheet {
-                    showAddGoal = false
-                    guard let userId = appState.currentUser?.id else { return }
-                    Task { await viewModel.load(userId: userId) }
+                .navigationDestination(for: Int.self) { goalId in
+                    detail(for: goalId)
                 }
+        }
+        .sheet(item: $sheet) { sheet in
+            sheetContent(sheet)
                 .environmentObject(appState)
-            }
-            .task {
-                guard let userId = appState.currentUser?.id else { return }
-                await viewModel.load(userId: userId)
-            }
+        }
+        .alert(
+            "Something went wrong",
+            isPresented: Binding(get: { viewModel.actionError != nil }, set: { if !$0 { viewModel.actionError = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(viewModel.actionError ?? "")
+        }
+        .onAppear(perform: onAppear)
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            isAuthorized = DashboardAvailability.isScreenTimeAuthorized()
+            viewModel.refreshProgress()
         }
     }
 
     // MARK: - Subviews
 
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "target")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
-            Text("No goals yet")
-                .font(.title3)
-                .fontWeight(.semibold)
-            Text("Tap + to create your first goal.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+    @ViewBuilder
+    private var content: some View {
+        if !isAuthorized {
+            ScreenTimeAccessRequiredView(reason: "Nudge needs Screen Time access to choose apps and track your goals. You can turn it on in Settings.")
+        } else if viewModel.isLoading && viewModel.items.isEmpty {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let errorMessage = viewModel.error {
+            ContentUnavailableView {
+                Label("Something went wrong", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(errorMessage)
+            } actions: {
+                Button("Try Again", action: reload)
+                    .buttonStyle(.bordered)
+            }
+        } else if viewModel.items.isEmpty {
+            ContentUnavailableView {
+                Label("No goals yet", systemImage: "target")
+            } description: {
+                Text("Set a daily limit for an app, a category, or all your screen time.")
+            } actions: {
+                Button("Add Goal") { sheet = .addGoal }
+                    .buttonStyle(.borderedProminent)
+            }
+        } else {
+            goalList
         }
-        .padding(.horizontal, 24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var goalList: some View {
         List {
-            ForEach(viewModel.goals) { item in
-                GoalRow(item: item)
+            ForEach(viewModel.items) { item in
+                if item.status == .needsReselect {
+                    // Tap goes straight to the picker: there is nothing to show until
+                    // the selection is fixed.
+                    Button { reselect(item) } label: { GoalRow(item: item) }
+                        .buttonStyle(.plain)
+                } else {
+                    NavigationLink(value: item.id) { GoalRow(item: item) }
+                }
             }
-            .onDelete { indexSet in
-                deleteGoals(at: indexSet)
-            }
+            .onDelete(perform: deleteGoals)
+        }
+        .refreshable { await loadGoals() }
+    }
+
+    @ViewBuilder
+    private func detail(for goalId: Int) -> some View {
+        if let item = viewModel.item(id: goalId) {
+            GoalDetailView(
+                item: item,
+                onReselect: { reselect(item) },
+                onDelete: { deleteFromDetail(goalId: goalId) }
+            )
+        } else {
+            ContentUnavailableView("Goal not found", systemImage: "target")
         }
     }
 
-    private func errorView(message: String) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
-            Text("Something went wrong")
-                .font(.headline)
-            Text(message)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
+    @ViewBuilder
+    private func sheetContent(_ sheet: GoalsSheet) -> some View {
+        switch sheet {
+        case .addGoal:
+            AddGoalSheet { saved in
+                self.sheet = nil
+                if saved { reload() }
+            }
+        case .reselectApp(let goalId, let title):
+            ReselectAppSheet(
+                goalTitle: title,
+                onSave: { selection in
+                    guard let userId = appState.currentUser?.id else { return "You're signed out. Sign in and try again." }
+                    return await viewModel.reselectApp(goalId: goalId, selection: selection, userId: userId)
+                },
+                onCompleted: { self.sheet = nil }
+            )
+        case .editCategory(let category):
+            CategoryEditorSheet(mode: .edit(category)) { saved in
+                self.sheet = nil
+                if saved != nil { reload() }
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -102,11 +166,55 @@ struct GoalsView: View {
 // MARK: - Actions
 
 extension GoalsView {
+
+    private func onAppear() {
+        isAuthorized = DashboardAvailability.isScreenTimeAuthorized()
+        viewModel.refreshProgress()
+        // Categories may have been edited or deleted (cascading to goals) in the
+        // Categories tab, so refetch whenever the tab comes back.
+        reload()
+    }
+
+    private func reload() {
+        Task { await loadGoals() }
+    }
+
+    private func loadGoals() async {
+        guard isAuthorized, let userId = appState.currentUser?.id else { return }
+        await viewModel.load(userId: userId)
+    }
+
+    private func reselect(_ item: GoalListItem) {
+        switch item.goal.targetType {
+        case .app:
+            sheet = .reselectApp(goalId: item.id, title: item.title)
+        case .category:
+            // The tokens live on the category; fix them there. A missing category
+            // (already deleted) cannot be edited — the goal is gone after a refresh.
+            if let categoryId = item.goal.categoryId, let category = viewModel.category(id: categoryId) {
+                sheet = .editCategory(category)
+            } else {
+                reload()
+            }
+        case .total:
+            break
+        }
+    }
+
     private func deleteGoals(at offsets: IndexSet) {
         guard let userId = appState.currentUser?.id else { return }
-        for index in offsets {
-            let item = viewModel.goals[index]
-            Task { await viewModel.deleteGoal(item.goal, userId: userId) }
+        let ids = offsets.map { viewModel.items[$0].id }
+        Task {
+            for id in ids { await viewModel.deleteGoal(id: id, userId: userId) }
+        }
+    }
+
+    private func deleteFromDetail(goalId: Int) {
+        guard let userId = appState.currentUser?.id else { return }
+        Task {
+            if await viewModel.deleteGoal(id: goalId, userId: userId) {
+                path.removeAll { $0 == goalId }
+            }
         }
     }
 }
@@ -114,431 +222,38 @@ extension GoalsView {
 // MARK: - GoalRow
 
 private struct GoalRow: View {
-    let item: GoalWithProgress
+    let item: GoalListItem
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(targetLabel)
-                    .font(.headline)
-                Spacer()
-                Text(item.goal.frequency.displayName)
-                    .font(.caption)
+            HStack(alignment: .firstTextBaseline) {
+                GoalTargetLabel(target: item.target)
+                Spacer(minLength: 8)
+                Text(item.limitText)
+                    .font(.subheadline)
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
-            ProgressView(value: item.progressFraction)
-                .tint(item.isExceeded ? .red : .accentColor)
-            Text(timeLabel)
-                .font(.caption)
-                .foregroundStyle(item.isExceeded ? .red : .secondary)
+            GoalProgressBar(filledSteps: item.status == .active ? item.filledSteps : 0, isDimmed: item.status != .active)
+            HStack(spacing: 4) {
+                if item.status == .needsReselect {
+                    Image(systemName: "exclamationmark.circle.fill")
+                }
+                Text(item.caption)
+            }
+            .font(.caption)
+            .foregroundStyle(captionColor)
         }
         .padding(.vertical, 4)
+        .opacity(item.status == .active ? 1 : 0.75)
+        .accessibilityElement(children: .combine)
     }
 
-    private var targetLabel: String {
-        switch item.goal.targetType {
-        case .total:    return "All Apps"
-        case .app:      return item.goal.label ?? "Unknown App"
-        case .category: return item.goal.categoryId.map { "Category \($0)" } ?? "Unknown Category"
+    private var captionColor: Color {
+        switch item.status {
+        case .active: return item.filledSteps >= GoalProgressDisplay.stepCount ? .red : .secondary
+        case .needsReselect: return .orange
+        case .notMonitored, .notActiveToday: return .secondary
         }
-    }
-
-    private var timeLabel: String {
-        "\(item.usedSeconds.formattedDuration) / \(item.goal.limitSeconds.formattedDuration)"
-    }
-}
-
-// MARK: - GoalFrequency display
-
-private extension GoalFrequency {
-    var displayName: String {
-        switch self {
-        case .daily:   return "Daily"
-        case .weekly:  return "Weekly"
-        case .monthly: return "Monthly"
-        }
-    }
-}
-
-// MARK: - AddGoalSheet
-
-private enum GoalDuration { case permanent, temporary }
-
-private struct AddGoalSheet: View {
-    var onCompleted: () -> Void
-
-    @EnvironmentObject private var appState: AppState
-
-    private enum Step { case targetType, targetPicker, limitAndFrequency }
-
-    @State private var step: Step = .targetType
-    @State private var selectedTargetType: GoalTargetType? = nil
-    @State private var selectedCategoryId: Int? = nil
-    @State private var limitHours = 1
-    @State private var limitMinutes = 0
-    @State private var selectedFrequency: GoalFrequency = .daily
-    @State private var goalDuration: GoalDuration = .permanent
-    @State private var startDate = Date()
-    @State private var endDate = Date().addingTimeInterval(7 * 24 * 3600)
-    @State private var isLoading = false
-    @State private var errorMessage: String? = nil
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                switch step {
-                case .targetType:
-                    TargetTypeStep { type in
-                        selectedTargetType = type
-                        step = type == .total ? .limitAndFrequency : .targetPicker
-                    }
-                case .targetPicker:
-                    TargetPickerStep(
-                        targetType: selectedTargetType ?? .app,
-                        selectedCategoryId: $selectedCategoryId,
-                        onNext: { step = .limitAndFrequency }
-                    )
-                    .environmentObject(appState)
-                case .limitAndFrequency:
-                    LimitAndFrequencyStep(
-                        hours: $limitHours,
-                        minutes: $limitMinutes,
-                        frequency: $selectedFrequency,
-                        goalDuration: $goalDuration,
-                        startDate: $startDate,
-                        endDate: $endDate,
-                        isLoading: isLoading,
-                        errorMessage: errorMessage,
-                        onConfirm: confirm
-                    )
-                }
-            }
-            .navigationTitle(stepTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    if step == .targetType {
-                        Button("Cancel") { onCompleted() }
-                    } else {
-                        Button(action: goBack) {
-                            Image(systemName: "chevron.left")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private var stepTitle: String {
-        switch step {
-        case .targetType:          return "Choose Target"
-        case .targetPicker:        return selectedTargetType == .app ? "Pick App" : "Pick Category"
-        case .limitAndFrequency:   return "Set Limit"
-        }
-    }
-}
-
-#Preview("Add Goal") {
-    Color.clear.sheet(isPresented: .constant(true)) {
-        AddGoalSheet(onCompleted: {})
-            .environmentObject(AppState())
-    }
-}
-
-extension AddGoalSheet {
-
-    // MARK: - Navigation
-
-    private func goBack() {
-        switch step {
-        case .targetType:          break
-        case .targetPicker:        step = .targetType
-        case .limitAndFrequency:   step = selectedTargetType == .total ? .targetType : .targetPicker
-        }
-    }
-
-    // MARK: - Submit
-
-    private func confirm() {
-        guard let userId = appState.currentUser?.id,
-              let targetType = selectedTargetType else { return }
-
-        let totalSeconds = (limitHours * 3600) + (limitMinutes * 60)
-        guard totalSeconds > 0 else {
-            errorMessage = "Limit must be greater than zero."
-            return
-        }
-
-        let isTemporary = goalDuration == .temporary
-        let insert = GoalInsert(
-            userId: userId,
-            limitSeconds: totalSeconds,
-            frequency: selectedFrequency,
-            targetType: targetType,
-            categoryId: targetType == .category ? selectedCategoryId : nil,
-            // App goals need a FamilyActivityPicker selection + label (Phase 3b); the
-            // App option is disabled until then, so no app goal reaches this point.
-            selection: nil,
-            label: nil,
-            temporary: isTemporary,
-            startDate: isTemporary ? formatDate(startDate) : nil,
-            endDate: isTemporary ? formatDate(endDate) : nil
-        )
-
-        errorMessage = nil
-        isLoading = true
-        Task {
-            defer { isLoading = false }
-            do {
-                try await GoalService().createGoal(insert)
-                onCompleted()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
-    }
-}
-
-// MARK: - Step Views
-
-private struct TargetTypeStep: View {
-    var onSelected: (GoalTargetType) -> Void
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("What do you want to limit?")
-                .font(.title3)
-                .fontWeight(.semibold)
-                .padding(.top, 32)
-            VStack(spacing: 12) {
-                targetButton(label: "Total Usage", subtitle: "All apps combined", type: .total, icon: "iphone")
-                // Phase 3b replaces this with FamilyActivityPicker. Bundle IDs can't be
-                // monitored (ADR-042) and migration 006 requires a token selection.
-                targetButton(label: "Specific App", subtitle: "Coming soon", type: .app, icon: "app.fill")
-                    .disabled(true)
-                    .opacity(0.5)
-                targetButton(label: "App Category", subtitle: "Limit a custom group of apps", type: .category, icon: "folder.fill")
-            }
-            .padding(.horizontal, 24)
-            Spacer()
-        }
-    }
-
-    private func targetButton(label: String, subtitle: String, type: GoalTargetType, icon: String) -> some View {
-        Button { onSelected(type) } label: {
-            HStack(spacing: 16) {
-                Image(systemName: icon)
-                    .font(.title2)
-                    .frame(width: 36)
-                    .foregroundStyle(Color.accentColor)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(label).fontWeight(.semibold)
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right").foregroundStyle(.secondary)
-            }
-            .padding()
-            .background(Color(.secondarySystemGroupedBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct TargetPickerStep: View {
-    let targetType: GoalTargetType
-    @Binding var selectedCategoryId: Int?
-    var onNext: () -> Void
-
-    @EnvironmentObject private var appState: AppState
-    @State private var categories: [AppCategory] = []
-    @State private var isLoading = false
-    @State private var errorMessage: String? = nil
-
-    private var isNextEnabled: Bool {
-        targetType == .category && selectedCategoryId != nil
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if isLoading {
-                ProgressView().padding(.top, 48)
-            } else if let error = errorMessage {
-                Text(error).font(.footnote).foregroundStyle(.red).padding()
-            } else if targetType == .category {
-                categoryList
-            } else {
-                appPlaceholder
-            }
-            Spacer()
-            Button(action: onNext) {
-                Text("Next")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(!isNextEnabled ? Color.secondary : Color.accentColor)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-            .disabled(!isNextEnabled)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 40)
-        }
-        .task { await loadCategories() }
-    }
-
-    private var appPlaceholder: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "app.dashed")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
-                .padding(.top, 40)
-            Text("App goals are coming soon")
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var categoryList: some View {
-        List(categories) { category in
-            HStack {
-                Circle()
-                    .fill(Color(hex: category.color) ?? Color.accentColor)
-                    .frame(width: 14, height: 14)
-                Text(category.name)
-                Spacer()
-                if selectedCategoryId == category.id {
-                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
-                }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { selectedCategoryId = category.id }
-        }
-    }
-
-    private func loadCategories() async {
-        guard targetType == .category, let userId = appState.currentUser?.id else { return }
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            categories = try await CategoryService().fetchCategories(userId: userId)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-}
-
-private struct LimitAndFrequencyStep: View {
-    @Binding var hours: Int
-    @Binding var minutes: Int
-    @Binding var frequency: GoalFrequency
-    @Binding var goalDuration: GoalDuration
-    @Binding var startDate: Date
-    @Binding var endDate: Date
-    let isLoading: Bool
-    let errorMessage: String?
-    var onConfirm: () -> Void
-
-    private var isLimitSet: Bool { hours > 0 || minutes > 0 }
-    private var today: Date { Calendar.current.startOfDay(for: Date()) }
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 28) {
-
-                // Frequency
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Resets").font(.headline).padding(.horizontal, 24)
-                    Picker("Frequency", selection: $frequency) {
-                        Text("Daily").tag(GoalFrequency.daily)
-                        Text("Weekly").tag(GoalFrequency.weekly)
-                        Text("Monthly").tag(GoalFrequency.monthly)
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal, 24)
-                }
-
-                // Time limit
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Time limit").font(.headline).padding(.horizontal, 24)
-                    HStack(spacing: 0) {
-                        Picker("Hours", selection: $hours) {
-                            ForEach(0..<24) { h in Text("\(h)h").tag(h) }
-                        }
-                        .pickerStyle(.wheel)
-                        .frame(maxWidth: .infinity)
-                        Picker("Minutes", selection: $minutes) {
-                            ForEach([0, 5, 10, 15, 20, 30, 45], id: \.self) { m in Text("\(m)m").tag(m) }
-                        }
-                        .pickerStyle(.wheel)
-                        .frame(maxWidth: .infinity)
-                    }
-                }
-
-                // Duration
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Duration").font(.headline).padding(.horizontal, 24)
-                    Picker("Duration", selection: $goalDuration) {
-                        Text("Permanent").tag(GoalDuration.permanent)
-                        Text("Temporary").tag(GoalDuration.temporary)
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal, 24)
-
-                    if goalDuration == .temporary {
-                        DatePicker("Start", selection: $startDate, in: today..., displayedComponents: .date)
-                            .padding(.horizontal, 24)
-                        DatePicker("End", selection: $endDate, in: startDate..., displayedComponents: .date)
-                            .padding(.horizontal, 24)
-                    }
-                }
-
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .padding(.horizontal, 24)
-                }
-
-                Button(action: onConfirm) {
-                    Group {
-                        if isLoading {
-                            ProgressView()
-                        } else {
-                            Text("Save Goal").fontWeight(.semibold)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(!isLimitSet ? Color.secondary : Color.accentColor)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-                .disabled(!isLimitSet || isLoading)
-                .padding(.horizontal, 24)
-                .padding(.bottom, 40)
-            }
-            .padding(.top, 24)
-        }
-    }
-}
-
-// MARK: - Color hex extension
-
-extension Color {
-    init?(hex: String) {
-        var hex = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        if hex.hasPrefix("#") { hex.removeFirst() }
-        guard hex.count == 6, let value = UInt64(hex, radix: 16) else { return nil }
-        let r = Double((value >> 16) & 0xFF) / 255
-        let g = Double((value >> 8) & 0xFF) / 255
-        let b = Double(value & 0xFF) / 255
-        self.init(red: r, green: g, blue: b)
     }
 }

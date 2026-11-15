@@ -22,10 +22,16 @@ enum DashboardAvailability: Equatable {
         return false
     }
 
+    /// Live Screen Time authorization. Also gates the Goals and Categories tabs, whose
+    /// pickers and reports need the same access.
+    static func isScreenTimeAuthorized() -> Bool {
+        isAuthorized(AuthorizationCenter.shared.authorizationStatus)
+    }
+
     /// Reads the live system state.
     static func current() -> DashboardAvailability {
         resolve(
-            isAuthorized: isAuthorized(AuthorizationCenter.shared.authorizationStatus),
+            isAuthorized: isScreenTimeAuthorized(),
             isMonitoringActive: !DeviceActivityCenter().activities.isEmpty
         )
     }

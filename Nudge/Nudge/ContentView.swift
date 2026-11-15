@@ -15,9 +15,9 @@ struct ContentView: View {
                     Label("Dashboard", systemImage: "chart.bar.fill")
                 }
 
-            AppsView()
+            CategoriesView()
                 .tabItem {
-                    Label("Apps", systemImage: "square.grid.2x2.fill")
+                    Label("Categories", systemImage: "square.grid.2x2.fill")
                 }
 
             GoalsView()

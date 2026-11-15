@@ -56,17 +56,3 @@ struct AppCategory: Codable, Identifiable {
         case selection
     }
 }
-
-// MARK: - AppCategoryMember
-
-/// Deprecated with the `app_category_member` table (migration 006): categories are now
-/// a picker selection on `app_category.selection`. Kept until 3b removes its callers.
-struct AppCategoryMember: Codable {
-    let bundleId: String
-    let categoryId: Int
-
-    enum CodingKeys: String, CodingKey {
-        case bundleId    = "bundle_id"
-        case categoryId  = "category_id"
-    }
-}
