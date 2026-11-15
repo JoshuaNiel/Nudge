@@ -48,7 +48,7 @@ struct SettingsView: View {
 
             Button(role: .destructive) {
                 Task {
-                    try? await appState.authService.signOut()
+                    try? await appState.signOut()
                 }
             } label: {
                 Text("Sign Out")

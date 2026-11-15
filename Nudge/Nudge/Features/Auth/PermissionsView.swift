@@ -53,6 +53,9 @@ struct PermissionsView: View {
         Task {
             let center = UNUserNotificationCenter.current()
             _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
+            // Permission just granted (or provisional) — get an APNs token now rather than
+            // waiting for the next foreground. No-op if the user declined.
+            await PushRegistration.registerIfAuthorized()
             await MainActor.run { onCompleted() }
         }
     }

@@ -23,7 +23,7 @@ enum NudgeStatus: String, Codable {
 
 // MARK: - Friend
 
-struct Friend: Codable, Identifiable {
+struct Friend: Codable, Identifiable, Hashable {
     let id: Int
     let userId: UUID
     let friendName: String
