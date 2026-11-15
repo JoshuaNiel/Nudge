@@ -268,7 +268,7 @@ Required before push notifications work end-to-end.
 **APNs environment (server):** `_shared/apns.ts` already selects the host from the `APNS_SANDBOX` secret — `"true"` → `api.sandbox.push.apple.com`, anything else → `api.push.apple.com`. Xcode/development builds get **sandbox** tokens, so `APNS_SANDBOX=true` must be set while testing dev builds; TestFlight/App Store builds need it unset/`false`. The flag is global, so one project can't serve dev and production tokens at the same time (see backlog idea: store the environment per token).
 
 **Known limitations (deferred):**
-- Tapping a push for the friend whose history is already on screen doesn't refetch that history (path value unchanged). Covered by the "real-time nudge status update" item.
+- ~~Tapping a push for the friend whose history is already on screen doesn't refetch that history (path value unchanged).~~ Fixed by 5H (realtime UPDATE + foreground refetch).
 - Rows for rotated/uninstalled tokens, or for a user whose session expired without signing out on a shared device, aren't removed client-side (RLS only allows deleting your own rows). Server-side pruning on APNs `410 Unregistered` / `400 BadDeviceToken` would fix this.
 
 ### 5G — User Phone Number in Settings `[ ] Not started`
@@ -279,6 +279,39 @@ The app user can optionally add their own phone number so they receive the frien
 - [ ] Validate E.164 on input
 - [ ] Save to `profile.phone_number` via `AuthService.updateProfile`
 - [ ] Display note: "Used only to receive your friend's replies as a text message. You can opt out at any time."
+
+### 5H — Real-time Nudge Status `[~] Implemented — pending migration + on-device validation`
+
+The nudge history screen updates live when a nudge is sent or a friend replies — no manual refresh.
+
+- [x] **Migration `supabase/migrations/006b_realtime_nudge.sql`** — idempotently adds `public.nudge` to the `supabase_realtime` publication (`do $$` block checks `pg_publication_tables`). Named `006b` because another branch adds a `006`; the two are independent and can run in either order. **No RLS change**: Realtime Postgres Changes evaluates the existing "Users can read their own nudges" select policy as the subscribing user, so each user only receives their own nudges.
+- [x] **`NudgeRealtimeService`** (`Services/NudgeRealtimeService.swift`, `NudgeRealtimeServiceProtocol` + `@MainActor` class):
+  ```swift
+  enum NudgeChange: Equatable { case inserted(Nudge), updated(Nudge), subscribed }
+  protocol NudgeRealtimeServiceProtocol {
+      func changes(friendId: Int) -> AsyncStream<NudgeChange>
+  }
+  ```
+  - One channel per call, unique topic `nudge-history-<friendId>-<uuid>` (`supabase.channel(_:)` returns an existing channel for a reused topic, which could be one a previous screen is still leaving).
+  - Two bindings registered before `subscribeWithError()`: `postgresChange(InsertAction.self, …)` and `postgresChange(UpdateAction.self, …)` on `public.nudge` with `filter: .eq("friend_id", value: friendId)`. DELETE is not subscribed (nudges are only deleted by FK cascade when the friend is removed).
+  - Records decode with `JSONObject.decode(as: Nudge.self, decoder: PostgrestClient.Configuration.jsonDecoder)` — the same decoder as history fetches, so the existing snake_case `CodingKeys` apply and microsecond `+00:00` timestamps parse. An undecodable record is logged and skipped.
+  - Yields `.subscribed` on every transition into `RealtimeChannelStatus.subscribed` — the first join and each automatic rejoin after a socket reconnect.
+  - Stream termination (consumer stops / task cancelled) cancels the listener tasks, waits for any in-flight join to settle, then `supabase.removeChannel(channel)` (sends `leave`; the socket disconnects when no channels remain). No channel survives leaving the screen.
+  - Subscribe failure (`RealtimeError.maxRetryAttemptsReached`, etc.) is logged with `os.Logger` and non-fatal — the stream just yields nothing.
+- [x] **`NudgeHistoryViewModel`** (`Features/Social/NudgeHistoryViewModel.swift`, two-init pattern; production init takes `friendId`, test init injects `FriendServiceProtocol` + `NudgeRealtimeServiceProtocol`). Replaces the `@State` that lived in `NudgeHistoryView`.
+  - `start()` (run from `.task`): opens the stream first (join overlaps the fetch; events buffer), then `load()` if the list is empty, else a silent `refresh()` (re-appearing keeps the list, no spinner), then applies each change until cancelled / the stream ends.
+  - `load()`: spinner + error state, as before. `refresh()`: silent; failure keeps the current list (logged), and is shown only when there is nothing on screen.
+  - `.subscribed` → `refresh()` (covers anything missed while disconnected, including the gap between the first fetch and the join).
+  - `sceneDidBecomeActive()` → `refresh()` only while `start()` is running (screen visible).
+  - Stale-response guard: every fetch and every applied realtime change bumps a generation counter; a fetch that returns after a newer fetch/change is discarded.
+- [x] **Merge rules** (`NudgeHistoryMerge`, pure): order is newest `sent_timestamp` first, tie → higher id first (same as the query, made deterministic). INSERT of a new id → added in order. INSERT of an id already present → **no-op** (the held row is at least as new, e.g. already `replied`). UPDATE of a known id → replaced. UPDATE of an **unknown id → inserted** (its INSERT was missed while disconnected / before load; the UPDATE is the freshest state; RLS + the filter guarantee it is this friend's). Records whose `friend_id` differs → ignored (defensive).
+- [x] **View** (`NudgeHistoryView` in `SocialView.swift`): `@StateObject` view model; `.task { await viewModel.start() }` (auto-cancelled on disappear — subscription only lives while the history is visible); `.onChange(of: scenePhase)` → `sceneDidBecomeActive()`; `.refreshable` on the list, and the empty / error states are scrollable so pull-to-refresh retries from them too.
+- [x] Fixes the 5F limitation: tapping a reply push while that friend's history is already open now shows the reply — via the realtime UPDATE, and via the foreground refetch when the tap brings the app back from the background.
+- [x] Tests: `NudgeTests/RealtimeNudgeTests.swift` — merge rules (insert new / older / duplicate, update existing / unknown, other friend, `.subscribed`, ordering + tie-break), Realtime record decoding (insert with nulls + microsecond timestamp, replied update, `reply_delivered`, missing column throws), view model load / error / retry / refresh-keeps-list, and the stream (insert + update applied, other friend ignored, `.subscribed` refetches, stream end returns cleanly, cancel terminates the stream, re-appear opens exactly one new stream without spinner, foreground refetch only while observing).
+
+**Known limitations:**
+- If the socket is already dead when the screen closes, `removeChannel` → `unsubscribe()` waits for a server ack that may never come; the detached cleanup task then lingers (no UI effect; the channel is not re-used because topics are unique).
+- Realtime does not replay events missed while disconnected — covered by the refetch on every rejoin.
 
 ---
 
@@ -396,4 +429,4 @@ create policy "users manage own device tokens"
 - [ ] App user's phone number field in Settings
 - [ ] Nudge trigger system implemented (blocked on Phase 1 / Family Controls entitlement)
 - [ ] Nudge trigger settings UI (threshold configuration)
-- [ ] Real-time nudge status update in UI when `replied` / `reply_delivered` fires
+- [~] Real-time nudge status update in UI when `replied` / `reply_delivered` fires (code done — needs migration `006b_realtime_nudge.sql` + on-device check)

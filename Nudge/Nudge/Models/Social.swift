@@ -57,7 +57,7 @@ struct FriendInsert: Encodable {
 
 // MARK: - Nudge
 
-struct Nudge: Codable, Identifiable {
+struct Nudge: Codable, Identifiable, Equatable {
     let id: Int
     let friendId: Int
     let prompt: String        // Full SMS sent to friend (report + options)
