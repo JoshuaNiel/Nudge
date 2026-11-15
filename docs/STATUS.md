@@ -40,7 +40,7 @@ GitHub retargets a stacked PR to `main` automatically once the PR it's based on 
 | #23 | `feat/why-reminders` | #22 | Why-reminders on milestones |
 | #21 | `feat/nudge-trigger-settings` | #18 | `nudge_settings` + Settings Nudges section |
 | #24 | `feat/daily-report` | #21 | Daily report (total-only) |
-| this | `docs/session-wrap-2026-11-14` | #13 | STATUS, ADR-057–069, backlog, ProgressLog, architecture, weekly-goals spec |
+| #25 | `docs/session-wrap-2026-11-14` | #13 | STATUS, ADR-057–069, backlog, ProgressLog, architecture, weekly-goals spec |
 
 **Expected merge conflicts.** Sibling branches touch some of the same files: `SettingsView`, `NudgeApp`, `AppState`, `ContentView` and `MonitorExtension`, mostly in different places. Merge in the order above and resolve conflicts as each PR lands; Claude can rebase any PR on request.
 
@@ -67,7 +67,7 @@ GitHub retargets a stacked PR to `main` automatically once the PR it's based on 
 
 ## On-device verification still needed
 
-Each PR body has detailed steps. The key checks:
+**Follow `docs/testing-walkthrough.md`.** It gives the one-time setup, which branch to build to test which PRs (nothing is merged, so test the top of each stack), and step-by-step checks with expected results for every PR. The key checks:
 
 1. **#13:** leave the app closed overnight; a limit should still fire the next day.
 2. **#15, #22:** real app names and icons (`Label(token)`); totals match Settings → Screen Time; the goal-detail exact usage covers only that goal's apps.
