@@ -178,23 +178,25 @@ The main app must refresh `nudge.auth.jwt` in App Group whenever the Supabase se
 
 **`MonitoringRegistrationService`** owns this. It:
 - Re-registers monitoring on every app foreground if `DeviceActivityCenter.shared.activities` is empty (catches restarts)
-- Uses a **10-second debounce** when goals change — so rapid edits don't hammer `DeviceActivityCenter`
+- Uses a **1.5-second debounce** when goals change (ADR-035; was 10 s before Phase 3a) — so rapid edits don't hammer `DeviceActivityCenter`
 - Always registers a schedule even with an empty events dict — required so `DeviceActivityReport` (Phase 2) has a monitored period to query against
 
 ---
 
 ## Event Naming Scheme
 
-`DeviceActivityEvent.Name` is a string token. When `eventDidReachThreshold` fires, the event name tells the extension which goal or trigger caused it:
+`DeviceActivityEvent.Name` is a string token. When `eventDidReachThreshold` fires, the event name tells the extension which goal or trigger caused it.
+
+**Superseded for goals by Phase 3 (G3, `docs/specs/phase-3-goals.md`).** Every goal now registers ten milestone events instead of one; the target type lives in `GoalSummary.targetType`, not in the name.
 
 | Goal / Trigger Type | Event name format | Example |
 |---|---|---|
-| App-specific goal | `app.<bundle_id>` | `app.com.instagram.Instagram` |
-| Category goal | `category.<category_id>` | `category.7` |
-| Total screen time goal | `total` | `total` |
-| Session timeout (continuous use) | `session.timeout` | `session.timeout` |
+| Any goal (app, category, total) | `goal.<goal_id>.p<NN>`, NN = 10, 20 … 100, no zero padding | `goal.42.p50`, `goal.42.p100` |
+| Session timeout | `session.timeout` (unchanged) | `session.timeout` |
 
-The session timeout event fires based on the user's configured timeout setting (e.g. "send a nudge if I've been on my phone for 45 minutes straight"), not a DB goal.
+`goal.<id>.p100` is "limit reached" (local notification + goal-breach nudge); p10–p90 only record progress. Names are built and parsed in `Shared/MonitoringEvents.swift`; parsing accepts only canonical names (anything else, including the legacy `app.<bundle_id>` / `category.<id>` / `total` names from ADR-036, is "unknown" → "Nudge misconfigured" notification).
+
+The session timeout event fires based on the user's configured timeout setting (e.g. "send a nudge if I've been on my phone for 45 minutes"), not a DB goal.
 
 ---
 
@@ -236,7 +238,7 @@ Messages are built inside the monitor extension from `GoalSummary` data (read fr
 ### `MonitoringRegistrationService`
 - [x] `registerMonitoring(goals:sessionTimeoutMinutes:)` — builds events, calls `startMonitoring`
 - [x] `reregisterIfLapsed()` — re-registers if `activities` is empty; call on every foreground
-- [x] `goalDidChange()` — 10s debounced re-registration
+- [x] `goalDidChange()` — debounced re-registration (1.5 s per ADR-035 since Phase 3a; it now fetches its own inputs)
 - [x] Writes `[GoalSummary]` to `nudge.goals.active` in App Group after every registration
 
 ### `NudgeActivityMonitor` Extension
@@ -270,22 +272,31 @@ Messages are built inside the monitor extension from `GoalSummary` data (read fr
 | `nudge.auth.anonKey` | `String` | Main app (login) | Monitor extension |
 | `nudge.auth.jwt` | `String` | Main app (login / token refresh) | Monitor extension |
 | `nudge.triggers.pending` | JSON `[PendingTrigger]` | Monitor extension (Strategy 2) | Main app `NudgeTriggerService` |
-| `nudge.goals.active` | JSON `[GoalSummary]` | Main app (after registration) | Monitor extension |
+| `nudge.goals.active` | JSON `[GoalSummary]` — the full unfiltered catalog (Phase 3) | Main app (registration + every successful fetch) | Monitor extension |
+| `nudge.progress.<yyyy-MM-dd>` | JSON `{goalId: highestPercent}` (Phase 3 G4) | Monitor extension | Main app (Goals list) |
+| `nudge.fired.<yyyy-MM-dd>` | JSON `[eventName]` — once-per-day dedup (Phase 3 G4) | Monitor extension | Monitor extension |
 | `nudge.friends.accepted` | JSON `[FriendSummary]` | Main app (on login / friend changes) | Monitor extension |
 | `nudge.sync.midnightNeeded` | `Bool` | Monitor extension (`intervalDidEnd`) | Main app (on foreground) |
 
 ```swift
 struct PendingTrigger: Codable {
-    let eventName: String   // e.g. "app.com.instagram.Instagram"
+    let eventName: String   // e.g. "goal.42.p100", "session.timeout"
+    let report: String
     let timestamp: Date
 }
 
+// Phase 3a shape — see Shared/MonitoringModels.swift. New fields decode with defaults so
+// App Group JSON from earlier versions still loads.
 struct GoalSummary: Codable {
     let goalId: Int
-    let eventName: String           // matches DeviceActivityEvent.Name raw value
+    let eventName: String           // "goal.<id>" (milestone prefix) or "session.timeout"
     let limitSeconds: Int
     let targetLabel: String         // e.g. "Instagram", "Social Media", "All Apps"
-    let appBundleId: String?        // nil for category / total / session.timeout goals
+    let targetType: GoalTargetType  // session timeout uses .total
+    let frequency: GoalFrequency    // only .daily is monitored today
+    let startDate: String?          // "yyyy-MM-dd", temporary goals
+    let endDate: String?
+    let selectionData: Data?        // PropertyList FamilyActivitySelection (app/category)
 }
 
 struct FriendSummary: Codable {
@@ -301,7 +312,7 @@ struct FriendSummary: Codable {
 - `NudgeMessages.swift` — all message format methods with known inputs
 - `PendingTrigger` / `GoalSummary` — Codable encode/decode round-trips
 - `MonitoringRegistrationService` debounce — rapid `goalDidChange()` calls produce only one registration
-- Event name parsing — `"app.com.instagram.Instagram"` → correct goal type and bundle ID extracted
+- Event name parsing — `"goal.42.p50"` → milestone(goal 42, 50%); junk/legacy names → unknown (Phase 3a)
 
 ### Device Testing (manual)
 1. **Permission request** — `AuthorizationCenter.shared.requestAuthorization` shows system prompt; granted/denied handled correctly

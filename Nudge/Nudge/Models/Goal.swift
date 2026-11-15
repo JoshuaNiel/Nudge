@@ -1,18 +1,7 @@
 import Foundation
 
-// MARK: - Enums
-
-enum GoalFrequency: String, Codable {
-    case daily
-    case weekly
-    case monthly
-}
-
-enum GoalTargetType: String, Codable {
-    case app
-    case category
-    case total
-}
+// `GoalFrequency` and `GoalTargetType` live in `Shared/GoalTypes.swift`: the monitor
+// extension needs them for `GoalSummary`.
 
 // MARK: - Goal
 
@@ -22,11 +11,15 @@ struct Goal: Codable, Identifiable {
     let limitSeconds: Int
     let frequency: GoalFrequency
     let targetType: GoalTargetType
-    let bundleId: String?
+    let bundleId: String?       // deprecated (migration 006) — never written
     let categoryId: Int?
     let temporary: Bool
     let startDate: String?
     let endDate: String?
+    /// App goals: base64 PropertyList `FamilyActivitySelection` (see `SelectionCodec`).
+    let selection: String?
+    /// App goals: user-typed display name (tokens have no readable name).
+    let label: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -39,6 +32,8 @@ struct Goal: Codable, Identifiable {
         case temporary
         case startDate    = "start_date"
         case endDate      = "end_date"
+        case selection
+        case label
     }
 }
 
@@ -49,17 +44,23 @@ struct AppCategory: Codable, Identifiable {
     let userId: UUID
     let name: String
     let color: String   // hex "#RRGGBB"
+    /// Base64 PropertyList `FamilyActivitySelection` (≥1 token). `nil` for categories
+    /// created before migration 006.
+    let selection: String?
 
     enum CodingKeys: String, CodingKey {
         case id
         case userId = "user_id"
         case name
         case color
+        case selection
     }
 }
 
 // MARK: - AppCategoryMember
 
+/// Deprecated with the `app_category_member` table (migration 006): categories are now
+/// a picker selection on `app_category.selection`. Kept until 3b removes its callers.
 struct AppCategoryMember: Codable {
     let bundleId: String
     let categoryId: Int

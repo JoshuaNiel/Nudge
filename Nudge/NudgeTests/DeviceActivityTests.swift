@@ -47,39 +47,36 @@ struct GoalSummaryTests {
     @Test func roundTripApp() throws {
         let summary = GoalSummary(
             goalId: 1,
-            eventName: "app.com.instagram.Instagram",
+            eventName: "goal.1",
             limitSeconds: 1800,
             targetLabel: "Instagram",
-            appBundleId: "com.instagram.Instagram"
+            targetType: .app,
+            selectionData: Data([1, 2, 3])
         )
         let data = try encoder.encode(summary)
         let decoded = try decoder.decode(GoalSummary.self, from: data)
 
-        #expect(decoded.goalId == summary.goalId)
-        #expect(decoded.eventName == summary.eventName)
-        #expect(decoded.limitSeconds == summary.limitSeconds)
-        #expect(decoded.targetLabel == summary.targetLabel)
-        #expect(decoded.appBundleId == summary.appBundleId)
+        #expect(decoded == summary)
     }
 
     @Test func roundTripTotal() throws {
         let summary = GoalSummary(
             goalId: 2,
-            eventName: "total",
+            eventName: "goal.2",
             limitSeconds: 7200,
             targetLabel: "All Apps",
-            appBundleId: nil
+            targetType: .total
         )
         let data = try encoder.encode(summary)
         let decoded = try decoder.decode(GoalSummary.self, from: data)
 
         #expect(decoded.goalId == 2)
-        #expect(decoded.eventName == "total")
-        #expect(decoded.appBundleId == nil)
+        #expect(decoded.targetType == .total)
+        #expect(decoded.selectionData == nil)
     }
 
     @Test func encodesSnakeCaseKeys() throws {
-        let summary = GoalSummary(goalId: 1, eventName: "total", limitSeconds: 3600, targetLabel: "All Apps", appBundleId: nil)
+        let summary = GoalSummary(goalId: 1, eventName: "goal.1", limitSeconds: 3600, targetLabel: "All Apps", targetType: .total)
         let data = try encoder.encode(summary)
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
 
@@ -154,10 +151,10 @@ struct NudgeMessagesTests {
     @Test func reportForGoalApp() {
         let summary = GoalSummary(
             goalId: 1,
-            eventName: "app.com.instagram.Instagram",
+            eventName: "goal.1",
             limitSeconds: 1800,
             targetLabel: "Instagram",
-            appBundleId: "com.instagram.Instagram"
+            targetType: .app
         )
         let msg = NudgeMessages.reportForGoal(userName: "Josh", goalSummary: summary)
         #expect(msg.contains("Josh"))
@@ -168,46 +165,20 @@ struct NudgeMessagesTests {
     @Test func reportForGoalTotal() {
         let summary = GoalSummary(
             goalId: 2,
-            eventName: "total",
+            eventName: "goal.2",
             limitSeconds: 3600,
             targetLabel: "All Apps",
-            appBundleId: nil
+            targetType: .total
         )
         let msg = NudgeMessages.reportForGoal(userName: "Josh", goalSummary: summary)
         #expect(msg.contains("daily screen time limit"))
     }
 
     @Test func reportForSessionTimeout() {
-        let summary = GoalSummary(
-            goalId: 0,
-            eventName: "session.timeout",
-            limitSeconds: 2700,
-            targetLabel: "Session",
-            appBundleId: nil
-        )
+        let summary = MonitoringPlan.sessionTimeoutSummary(minutes: 45)
         let msg = NudgeMessages.reportForGoal(userName: "Josh", goalSummary: summary)
         #expect(msg.contains("on their phone for 45 minutes"))
     }
 
-    // Event name parsing helpers
-    @Test func eventNamePrefixApp() {
-        let eventName = "app.com.instagram.Instagram"
-        #expect(eventName.hasPrefix("app."))
-        let bundleId = String(eventName.dropFirst("app.".count))
-        #expect(bundleId == "com.instagram.Instagram")
-    }
-
-    @Test func eventNamePrefixCategory() {
-        let eventName = "category.7"
-        #expect(eventName.hasPrefix("category."))
-        let categoryIdStr = String(eventName.dropFirst("category.".count))
-        #expect(categoryIdStr == "7")
-        #expect(Int(categoryIdStr) == 7)
-    }
-
-    @Test func eventNameTotal() {
-        #expect("total" == "total")
-        #expect(!"total".hasPrefix("app."))
-        #expect(!"total".hasPrefix("category."))
-    }
+    // Event name parsing is covered by "Goals core — event name parsing" (GoalsCoreTests).
 }
