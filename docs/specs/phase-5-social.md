@@ -130,7 +130,13 @@ All three Edge Functions are written and deployed.
 - Encouragement: "You're stronger than the algorithm! I believe in you, now get off your phone and go do something that will make you happy!"
 - Shame: "4 hours a day is 25% of your waking hours. Do you really want to waste another day of your life accomplishing nothing?"
 
-### 5E — Nudge Trigger System `[ ] Not started`
+### 5E — Nudge Trigger System `[ ] In progress`
+
+> **Settings + daily report are specified in [`phase-5e-trigger-settings.md`](phase-5e-trigger-settings.md)**
+> (approved v2 spec; it supersedes this section where they differ — e.g. settings live in
+> `nudge_settings`, not `profile`, and the daily report is total-only). 5E-1 (settings
+> table, Settings "Nudges" section, session-timeout + goal-breach toggles) is implemented
+> on `feat/nudge-trigger-settings`; 5E-2 (daily report sending) is next.
 
 **Blocked on Phase 1** — requires `DeviceActivityMonitor` extension and Family Controls entitlement. Now unblocked (entitlement approved, physical device available).
 

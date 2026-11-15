@@ -16,6 +16,7 @@ struct SettingsView: View {
             Form {
                 accountSection
                 profileSection
+                nudgesSection
             }
             .navigationTitle("Settings")
             .scrollDismissesKeyboard(.interactively)
@@ -88,6 +89,57 @@ struct SettingsView: View {
         } footer: {
             Text("Phone is optional — used only to receive your friend's replies as a text message. You can opt out at any time.")
         }
+    }
+
+    // MARK: - Nudges (Phase 5E)
+
+    /// Three sections so each trigger keeps its own footer; the first carries the header.
+    /// Changes go through the shared Save bar like the profile fields.
+    @ViewBuilder
+    private var nudgesSection: some View {
+        Section {
+            if viewModel.showsNoFriendsNote {
+                Label("Add a friend to start sending nudges.", systemImage: "person.badge.plus")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            if !viewModel.nudgeSettingsLoaded && !viewModel.isLoading {
+                Text("Couldn't load your nudge settings.")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+
+            Toggle("Too much screen time", isOn: $viewModel.nudgeSettings.sessionTimeoutEnabled)
+            if viewModel.nudgeSettings.sessionTimeoutEnabled {
+                Picker("After", selection: $viewModel.nudgeSettings.sessionTimeoutMinutes) {
+                    ForEach(NudgeSettings.allowedSessionTimeoutMinutes, id: \.self) { minutes in
+                        Text((minutes * 60).formattedDuration).tag(minutes)
+                    }
+                }
+            }
+        } header: {
+            Text("Nudges")
+        } footer: {
+            Text("Friends are nudged after this much total screen time in a day.")
+        }
+        .disabled(!viewModel.nudgeSettingsLoaded)
+
+        Section {
+            Toggle("Goal limit reached", isOn: $viewModel.nudgeSettings.goalBreachEnabled)
+        } footer: {
+            Text("Friends are nudged when you hit a goal's limit.")
+        }
+        .disabled(!viewModel.nudgeSettingsLoaded)
+
+        Section {
+            Toggle("Daily report", isOn: $viewModel.nudgeSettings.dailyReportEnabled)
+            if viewModel.nudgeSettings.dailyReportEnabled {
+                DatePicker("Send at", selection: $viewModel.dailyReportDate, displayedComponents: .hourAndMinute)
+            }
+        } footer: {
+            Text("Sent at or after this time, when iOS next runs Nudge. Shows your approximate total screen time for yesterday.")
+        }
+        .disabled(!viewModel.nudgeSettingsLoaded)
     }
 
     /// A labeled row (leading label, trailing field) with an optional inline error below.
