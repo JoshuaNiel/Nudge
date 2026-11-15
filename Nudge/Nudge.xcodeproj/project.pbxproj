@@ -88,6 +88,13 @@
 			);
 			target = CA6204A22F8F6191007AEB05 /* NudgeActivityReport */;
 		};
+		CA9900022F9000010060C731 /* Exceptions for "Shared" folder in "NudgeActivityMonitor" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				ReportContext.swift,
+			);
+			target = CA62048B2F8F5F63007AEB05 /* NudgeActivityMonitor */;
+		};
 		CAB705752F85E2D600940263 /* Exceptions for "Nudge" folder in "Nudge" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -129,6 +136,9 @@
 		};
 		CA9900012F9000010060C731 /* Shared */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				CA9900022F9000010060C731 /* Exceptions for "Shared" folder in "NudgeActivityMonitor" target */,
+			);
 			path = Shared;
 			sourceTree = "<group>";
 		};
@@ -266,6 +276,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				CA6204A42F8F6191007AEB05 /* NudgeActivityReport */,
+				CA9900012F9000010060C731 /* Shared */,
 			);
 			name = NudgeActivityReport;
 			packageProductDependencies = (
