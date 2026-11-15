@@ -1,7 +1,54 @@
 import Foundation
 import Supabase
 
-class CategoryService {
+// MARK: - Write models
+
+/// Insert payload for `app_category`. `selection` is the base64 PropertyList
+/// `FamilyActivitySelection` (`SelectionCodec`, G1).
+struct AppCategoryInsert: Encodable {
+    let userId: UUID
+    let name: String
+    let color: String
+    let selection: String
+
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case name
+        case color
+        case selection
+    }
+}
+
+/// Update payload: owner is never rewritten.
+struct AppCategoryUpdate: Encodable {
+    let name: String
+    let color: String
+    let selection: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case color
+        case selection
+    }
+}
+
+// MARK: - Protocol
+
+/// Categories are picker selections stored on `app_category.selection` (G10). The
+/// deprecated `app_category_member` table is no longer read or written.
+protocol CategoryServiceProtocol {
+    func fetchCategories(userId: UUID) async throws -> [AppCategory]
+    func createCategory(userId: UUID, name: String, color: String, selection: String) async throws -> AppCategory
+    func updateCategory(id: Int, userId: UUID, name: String, color: String, selection: String) async throws -> AppCategory
+    /// Goals using the category are removed by the DB (`on delete cascade`).
+    func deleteCategory(id: Int, userId: UUID) async throws
+}
+
+// MARK: - Service
+
+/// Every query is scoped to `user_id` in addition to RLS (defense in depth).
+@MainActor
+final class CategoryService: CategoryServiceProtocol {
 
     func fetchCategories(userId: UUID) async throws -> [AppCategory] {
         try await supabase
@@ -12,47 +59,34 @@ class CategoryService {
             .value
     }
 
-    func createCategory(userId: UUID, name: String, color: String) async throws -> AppCategory {
+    func createCategory(userId: UUID, name: String, color: String, selection: String) async throws -> AppCategory {
         try await supabase
             .from("app_category")
-            .insert(["user_id": userId.uuidString, "name": name, "color": color])
+            .insert(AppCategoryInsert(userId: userId, name: name, color: color, selection: selection))
             .select()
             .single()
             .execute()
             .value
     }
 
-    func deleteCategory(id: Int) async throws {
+    func updateCategory(id: Int, userId: UUID, name: String, color: String, selection: String) async throws -> AppCategory {
+        try await supabase
+            .from("app_category")
+            .update(AppCategoryUpdate(name: name, color: color, selection: selection))
+            .eq("id", value: id)
+            .eq("user_id", value: userId)
+            .select()
+            .single()
+            .execute()
+            .value
+    }
+
+    func deleteCategory(id: Int, userId: UUID) async throws {
         try await supabase
             .from("app_category")
             .delete()
             .eq("id", value: id)
+            .eq("user_id", value: userId)
             .execute()
-    }
-
-    func addApp(bundleId: String, categoryId: Int) async throws {
-        try await supabase
-            .from("app_category_member")
-            .insert(["bundle_id": bundleId, "category_id": String(categoryId)])
-            .execute()
-    }
-
-    func removeApp(bundleId: String, categoryId: Int) async throws {
-        try await supabase
-            .from("app_category_member")
-            .delete()
-            .eq("bundle_id", value: bundleId)
-            .eq("category_id", value: categoryId)
-            .execute()
-    }
-
-    func fetchMembers(categoryId: Int) async throws -> [String] {
-        let members: [AppCategoryMember] = try await supabase
-            .from("app_category_member")
-            .select()
-            .eq("category_id", value: categoryId)
-            .execute()
-            .value
-        return members.map(\.bundleId)
     }
 }

@@ -15,5 +15,6 @@ import ExtensionKit
 struct NudgeActivityReport: DeviceActivityReportExtension {
     var body: some DeviceActivityReportScene {
         NudgeUsageReport { summary in DashboardReportView(summary: summary) }
+        GoalUsageReport { summary in GoalUsageReportView(summary: summary) }
     }
 }

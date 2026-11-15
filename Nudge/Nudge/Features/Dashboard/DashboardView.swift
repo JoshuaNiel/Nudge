@@ -18,7 +18,6 @@ import FamilyControls
 struct DashboardView: View {
     // Environment
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.openURL) private var openURL
 
     // Local state
     /// Always a start of day within `DashboardDay`'s selectable range.
@@ -66,14 +65,7 @@ struct DashboardView: View {
     private var content: some View {
         switch availability {
         case .needsAuthorization:
-            ContentUnavailableView {
-                Label("Screen Time access required", systemImage: "hourglass.badge.plus")
-            } description: {
-                Text("Nudge needs Screen Time access to show your usage. You can turn it on in Settings.")
-            } actions: {
-                Button("Open Settings", action: openSettings)
-                    .buttonStyle(.borderedProminent)
-            }
+            ScreenTimeAccessRequiredView(reason: "Nudge needs Screen Time access to show your usage. You can turn it on in Settings.")
         case .trackingInactive:
             ContentUnavailableView {
                 Label("Usage tracking not active", systemImage: "chart.bar.xaxis")
@@ -191,10 +183,5 @@ extension DashboardView {
             updateAvailability()
             if availability != .trackingInactive { return }
         }
-    }
-
-    private func openSettings() {
-        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-        openURL(url)
     }
 }

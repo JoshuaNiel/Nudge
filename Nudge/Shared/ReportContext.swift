@@ -11,5 +11,8 @@ import SwiftUI
 // monitor extension — which runs under a tight memory limit — should not link
 // SwiftUI for one constant.
 extension DeviceActivityReport.Context {
+    /// Dashboard: the day's total and per-app breakdown (Phase 2).
     static let nudgeSummary = Self("NudgeSummary")
+    /// Goal detail: exact usage today for one goal's apps/categories (Phase 3 G8).
+    static let goalUsage = Self("GoalUsage")
 }

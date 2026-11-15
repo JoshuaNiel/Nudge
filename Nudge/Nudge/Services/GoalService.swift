@@ -111,6 +111,8 @@ protocol GoalServiceProtocol {
     func fetchGoals(userId: UUID) async throws -> [Goal]
     func createGoal(_ goal: GoalInsert) async throws
     func deleteGoal(id: Int, userId: UUID) async throws
+    /// Replaces an app goal's token selection ("Re-select app").
+    func updateGoalSelection(id: Int, userId: UUID, selection: String) async throws
     func fetchGoalSummaries(userId: UUID) async throws -> [GoalSummary]
 }
 
@@ -139,6 +141,15 @@ class GoalService: GoalServiceProtocol {
         try await supabase
             .from("goal")
             .delete()
+            .eq("id", value: id)
+            .eq("user_id", value: userId)
+            .execute()
+    }
+
+    func updateGoalSelection(id: Int, userId: UUID, selection: String) async throws {
+        try await supabase
+            .from("goal")
+            .update(["selection": selection])
             .eq("id", value: id)
             .eq("user_id", value: userId)
             .execute()
