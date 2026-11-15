@@ -25,9 +25,9 @@ struct ContentView: View {
                 }
                 .tag(AppTab.dashboard)
 
-            AppsView()
+            CategoriesView()
                 .tabItem {
-                    Label("Apps", systemImage: "square.grid.2x2.fill")
+                    Label("Categories", systemImage: "square.grid.2x2.fill")
                 }
                 .tag(AppTab.apps)
 

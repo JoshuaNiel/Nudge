@@ -1,6 +1,6 @@
 # Phase 3 — Goals (v2: tokens + milestones)
 
-**Status:** `[ ] Spec v2 — approved 2026-11-14; 3a in progress`
+**Status:** `[~] Spec v2 — approved 2026-11-14; 3a + 3b implemented, awaiting on-device verification`
 
 **Supersedes** the v1 spec, which assumed goal progress came from the Supabase `usage`
 table. That table is never populated: Screen Time data cannot leave the
@@ -160,6 +160,73 @@ deleted too (DB cascade). Editing a category's selection triggers `goalDidChange
 - [x] `GoalService.fetchGoalSummaries` reads selection/label/category selection
 - [x] `goalDidChange()` 1.5 s debounce, self-fetching (not yet wired to UI — 3b)
 - [ ] On-device verification (see 3b)
+
+## 3b implementation notes (decisions made while implementing)
+
+- **Pure rules are testable types**, not view code: `GoalTargetValidation` (exactly one
+  app token, no categories/web domains; label required, ≤100 after trimming),
+  `GoalLimit` (5 min … 23h 59m), `GoalDateRange` (start ≥ today, end ≥ start, by local
+  day; `yyyy-MM-dd` via `MonitoringPlan.dayStamp`), `GoalProgressDisplay` (10 steps;
+  "Under 10%" / "≈ N% used" / "Limit reached"), `CategoryRules`, `CategoryPalette`,
+  `SaveErrorMessage` (`23505` → friendly copy, anything else → generic; raw DB errors are
+  never shown), `GoalUsageSummary` / `GoalUsageDay` (Shared). Tests:
+  `NudgeTests/GoalsUITests.swift`.
+- **`GoalListItem.make`** resolves each goal against its category, decoded selection and
+  today's progress. Status: `active`, `needsReselect` (missing/undecodable/empty
+  selection, or missing category — same skip rule as `MonitoringPlan`), `notMonitored`
+  (legacy weekly/monthly rows: listed so they can be deleted, never labelled with a
+  frequency, limit shown without "/ day"), `notActiveToday` (temporary goal outside its
+  range). Only `active` rows show milestone progress.
+- **Re-select.** Tapping a `needsReselect` row skips the detail: app goals open a
+  picker sheet that saves through the new `GoalServiceProtocol.updateGoalSelection`
+  (same validator; `23505` mapped); category goals open that category's editor.
+- **Goal detail** builds `DeviceActivityFilter(segment: .daily(during: today))` with the
+  goal's (or its category's) application/category/web-domain tokens; total → no tokens.
+  App/category goals without a usable selection show no report (an empty filter would
+  report all usage under the goal's name). Report frame is fixed at 110 pt (ADR-044) and
+  re-keyed on foreground. The extension's `GoalUsageReport` sums segment
+  `totalActivityDuration`, rounding once.
+- **ViewModels:** `GoalsViewModel` (list, progress refresh without refetch, delete,
+  re-select), `AddGoalViewModel`, `CategoriesViewModel`, `CategoryEditorViewModel`. Each
+  successful write calls `goalDidChange()` exactly once (on
+  `MonitoringRegistrationService.shared`); failures never do. Category *create* also
+  calls it, per the spec; it does not re-register because the active-set signature is
+  unchanged. A failed delete shows an alert and leaves the list in place.
+- **Services.** `CategoryService` now has a protocol and is user-scoped on every query
+  (in addition to RLS): `fetchCategories(userId:)`, `createCategory(userId:name:color:selection:)`,
+  `updateCategory(id:userId:name:color:selection:)`, `deleteCategory(id:userId:)`.
+  `userId` is explicit because `app_category.user_id` has no default. The bundle-ID
+  member methods, `AppCategoryMember` and the stub `GoalEvaluationService` (which read
+  the never-populated `usage` table) are removed, as is `GoalWithProgress`.
+- **Progress** is read through `GoalProgressReading` (`AppGroupGoalProgressReader` wraps
+  `GoalProgressStore`) on every appear of the Goals tab and every foreground. Goals and
+  categories are also refetched when the Goals tab appears, because deleting or editing
+  a category in the Categories tab changes them.
+- **Screen Time not authorized** → both tabs show `ScreenTimeAccessRequiredView` (now
+  shared with the Dashboard) using `DashboardAvailability.isScreenTimeAuthorized()`;
+  re-checked on appear and foreground.
+- **Category selections** need ≥1 app or Apple-category token. Web domains may be
+  included alongside (they are monitored) but are not enough on their own; the summary
+  adds ", N websites" only when present. Name ≤100 (`varchar(100)`).
+- **Category delete** uses a non-destructive-role swipe action plus a confirmation
+  dialog ("Goals that use this category will be deleted too.") so the row is not removed
+  before the user confirms. Goal swipe-to-delete stays immediate; the detail screen's
+  Delete asks for confirmation.
+- **Palette:** `#FF3B30 #FF9500 #FFCC00 #34C759 #00C7BE #007AFF #5856D6 #AF52DE`
+  (default `#007AFF`). An existing category with a non-palette but valid hex keeps it.
+- **Tab:** the Apps tab (`AppsView`) is replaced by `CategoriesView`, labelled
+  "Categories", same icon.
+
+### 3b checklist
+- [x] Goals list: target (`Label(token)` + label / color dot + name / "All Apps"), "Xh / day", 10-step bar + caption, refresh on appear + foreground, swipe-to-delete
+- [x] "Re-select app" state for undecodable selections (tap → picker / category editor)
+- [x] Goal detail with `goalUsage` report (second scene in `NudgeActivityReport`), limit, milestone bar, temporary range, Delete with confirmation
+- [x] Add Goal sheet: App (`FamilyActivityPicker`, exactly one app, required name) | Category (existing or "New category…") | Total; limit 5 min–23h 59m; optional temporary range; no frequency option
+- [x] Categories tab: list with "N apps, M categories", create/edit (name, 8-color palette, picker), delete with cascade warning
+- [x] `goalDidChange()` wired to every goal/category write (once on success, never on failure)
+- [x] Screen Time not authorized → access-required state on Goals and Categories
+- [x] Unit tests for all of the above (`GoalsUITests.swift`)
+- [ ] On-device verification (acceptance criteria above)
 
 ## PR split
 - **3a `feat/goals-core`**: migration 006, models, `SelectionCodec`, `MonitoringPlan` milestones + date
