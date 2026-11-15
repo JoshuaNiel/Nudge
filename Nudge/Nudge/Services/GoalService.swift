@@ -1,28 +1,27 @@
 import Foundation
 import Supabase
+import os
 
-// MARK: - GoalWithDetails (private join model)
+// MARK: - GoalSummaryRow (monitoring join model)
 
-/// Decoded from a Supabase query that joins the `app` and `app_category` tables
-/// to retrieve display names alongside goal data.
-private struct GoalWithDetails: Decodable {
+/// One `goal` row with its category embedded (`app_category(name, selection)`), as
+/// returned by `fetchGoalSummaries`. Internal rather than private so the mapping to
+/// `GoalSummary` is unit-tested against literal PostgREST JSON.
+struct GoalSummaryRow: Decodable {
     let id: Int
     let limitSeconds: Int
     let frequency: GoalFrequency
     let targetType: GoalTargetType
-    let bundleId: String?
     let categoryId: Int?
-    let temporary: Bool
+    let selection: String?
+    let label: String?
     let startDate: String?
     let endDate: String?
-    let app: AppInfo?
     let appCategory: CategoryInfo?
 
-    struct AppInfo: Decodable {
-        let name: String
-    }
     struct CategoryInfo: Decodable {
         let name: String
+        let selection: String?
     }
 
     enum CodingKeys: String, CodingKey {
@@ -30,46 +29,51 @@ private struct GoalWithDetails: Decodable {
         case limitSeconds = "limit_seconds"
         case frequency
         case targetType   = "target_type"
-        case bundleId     = "bundle_id"
         case categoryId   = "category_id"
-        case temporary
+        case selection
+        case label
         case startDate    = "start_date"
         case endDate      = "end_date"
-        case app
         case appCategory  = "app_category"
     }
 
-    func toGoalSummary() -> GoalSummary? {
+    private static let logger = Logger(subsystem: "com.joshuaqn.Nudge", category: "GoalService")
+
+    /// Labels (Phase 3 G2): app → `label`, category → category name, total → "All Apps".
+    /// Selections: app → the goal's own, category → the category's, total → none.
+    /// A missing or invalid selection yields `selectionData == nil`; the goal stays in the
+    /// catalog (the UI shows "Re-select app") and `MonitoringPlan` skips it.
+    func toGoalSummary() -> GoalSummary {
+        let targetLabel: String
+        let encodedSelection: String?
         switch targetType {
         case .app:
-            guard let bundleId else { return nil }
-            let label = app?.name ?? bundleId.components(separatedBy: ".").last ?? bundleId
-            return GoalSummary(
-                goalId: id,
-                eventName: "app.\(bundleId)",
-                limitSeconds: limitSeconds,
-                targetLabel: label,
-                appBundleId: bundleId
-            )
+            targetLabel = label ?? "App"
+            encodedSelection = selection
         case .category:
-            guard let categoryId else { return nil }
-            let label = appCategory?.name ?? "Category \(categoryId)"
-            return GoalSummary(
-                goalId: id,
-                eventName: "category.\(categoryId)",
-                limitSeconds: limitSeconds,
-                targetLabel: label,
-                appBundleId: nil
-            )
+            targetLabel = appCategory?.name ?? "Category"
+            encodedSelection = appCategory?.selection
         case .total:
-            return GoalSummary(
-                goalId: id,
-                eventName: "total",
-                limitSeconds: limitSeconds,
-                targetLabel: "All Apps",
-                appBundleId: nil
-            )
+            targetLabel = "All Apps"
+            encodedSelection = nil
         }
+
+        let selectionData = encodedSelection.flatMap { SelectionCodec.data(fromBase64: $0) }
+        if encodedSelection != nil && selectionData == nil {
+            Self.logger.error("goal \(id) has a selection that is not valid base64")
+        }
+
+        return GoalSummary(
+            goalId: id,
+            eventName: MonitoringPlan.goalEventBase(goalId: id),
+            limitSeconds: limitSeconds,
+            targetLabel: targetLabel,
+            targetType: targetType,
+            frequency: frequency,
+            startDate: startDate,
+            endDate: endDate,
+            selectionData: selectionData
+        )
     }
 }
 
@@ -80,8 +84,9 @@ struct GoalInsert: Encodable {
     let limitSeconds: Int
     let frequency: GoalFrequency
     let targetType: GoalTargetType
-    let bundleId: String?
     let categoryId: Int?
+    let selection: String?
+    let label: String?
     let temporary: Bool
     let startDate: String?
     let endDate: String?
@@ -91,15 +96,28 @@ struct GoalInsert: Encodable {
         case limitSeconds = "limit_seconds"
         case frequency
         case targetType   = "target_type"
-        case bundleId     = "bundle_id"
         case categoryId   = "category_id"
+        case selection
+        case label
         case temporary
         case startDate    = "start_date"
         case endDate      = "end_date"
     }
 }
 
-class GoalService {
+// MARK: - Protocol
+
+protocol GoalServiceProtocol {
+    func fetchGoals(userId: UUID) async throws -> [Goal]
+    func createGoal(_ goal: GoalInsert) async throws
+    func deleteGoal(id: Int, userId: UUID) async throws
+    func fetchGoalSummaries(userId: UUID) async throws -> [GoalSummary]
+}
+
+// MARK: - Service
+
+@MainActor
+class GoalService: GoalServiceProtocol {
 
     func fetchGoals(userId: UUID) async throws -> [Goal] {
         try await supabase
@@ -126,20 +144,21 @@ class GoalService {
             .execute()
     }
 
-    /// Fetches all goals with their display names (app name or category name)
-    /// and converts them to `GoalSummary` values for use by MonitoringRegistrationService.
+    /// Fetches every goal (all frequencies, all dates — the catalog) with its label and
+    /// token selection, converted to `GoalSummary` for `MonitoringRegistrationService`.
+    /// Filtering to today's active set happens in `MonitoringPlan`.
     func fetchGoalSummaries(userId: UUID) async throws -> [GoalSummary] {
-        let goals: [GoalWithDetails] = try await supabase
+        let rows: [GoalSummaryRow] = try await supabase
             .from("goal")
             .select("""
-                id, limit_seconds, frequency, target_type, bundle_id, category_id, \
-                temporary, start_date, end_date, \
-                app(name), app_category(name)
+                id, limit_seconds, frequency, target_type, category_id, \
+                selection, label, start_date, end_date, \
+                app_category(name, selection)
                 """)
             .eq("user_id", value: userId)
             .execute()
             .value
 
-        return goals.compactMap { $0.toGoalSummary() }
+        return rows.map { $0.toGoalSummary() }
     }
 }

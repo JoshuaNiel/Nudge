@@ -138,7 +138,7 @@ private struct GoalRow: View {
     private var targetLabel: String {
         switch item.goal.targetType {
         case .total:    return "All Apps"
-        case .app:      return item.goal.bundleId ?? "Unknown App"
+        case .app:      return item.goal.label ?? "Unknown App"
         case .category: return item.goal.categoryId.map { "Category \($0)" } ?? "Unknown Category"
         }
     }
@@ -173,7 +173,6 @@ private struct AddGoalSheet: View {
 
     @State private var step: Step = .targetType
     @State private var selectedTargetType: GoalTargetType? = nil
-    @State private var selectedBundleId: String? = nil
     @State private var selectedCategoryId: Int? = nil
     @State private var limitHours = 1
     @State private var limitMinutes = 0
@@ -196,7 +195,6 @@ private struct AddGoalSheet: View {
                 case .targetPicker:
                     TargetPickerStep(
                         targetType: selectedTargetType ?? .app,
-                        selectedBundleId: $selectedBundleId,
                         selectedCategoryId: $selectedCategoryId,
                         onNext: { step = .limitAndFrequency }
                     )
@@ -277,8 +275,11 @@ extension AddGoalSheet {
             limitSeconds: totalSeconds,
             frequency: selectedFrequency,
             targetType: targetType,
-            bundleId: targetType == .app ? selectedBundleId : nil,
             categoryId: targetType == .category ? selectedCategoryId : nil,
+            // App goals need a FamilyActivityPicker selection + label (Phase 3b); the
+            // App option is disabled until then, so no app goal reaches this point.
+            selection: nil,
+            label: nil,
             temporary: isTemporary,
             startDate: isTemporary ? formatDate(startDate) : nil,
             endDate: isTemporary ? formatDate(endDate) : nil
@@ -317,7 +318,11 @@ private struct TargetTypeStep: View {
                 .padding(.top, 32)
             VStack(spacing: 12) {
                 targetButton(label: "Total Usage", subtitle: "All apps combined", type: .total, icon: "iphone")
-                targetButton(label: "Specific App", subtitle: "Limit a single app", type: .app, icon: "app.fill")
+                // Phase 3b replaces this with FamilyActivityPicker. Bundle IDs can't be
+                // monitored (ADR-042) and migration 006 requires a token selection.
+                targetButton(label: "Specific App", subtitle: "Coming soon", type: .app, icon: "app.fill")
+                    .disabled(true)
+                    .opacity(0.5)
                 targetButton(label: "App Category", subtitle: "Limit a custom group of apps", type: .category, icon: "folder.fill")
             }
             .padding(.horizontal, 24)
@@ -349,7 +354,6 @@ private struct TargetTypeStep: View {
 
 private struct TargetPickerStep: View {
     let targetType: GoalTargetType
-    @Binding var selectedBundleId: String?
     @Binding var selectedCategoryId: Int?
     var onNext: () -> Void
 
@@ -359,7 +363,7 @@ private struct TargetPickerStep: View {
     @State private var errorMessage: String? = nil
 
     private var isNextEnabled: Bool {
-        targetType == .app ? selectedBundleId != nil : selectedCategoryId != nil
+        targetType == .category && selectedCategoryId != nil
     }
 
     var body: some View {
@@ -396,21 +400,8 @@ private struct TargetPickerStep: View {
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
                 .padding(.top, 40)
-            Text("App picker coming soon")
+            Text("App goals are coming soon")
                 .foregroundStyle(.secondary)
-            Text("Enter bundle ID manually:")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            TextField("com.example.app", text: Binding(
-                get: { selectedBundleId ?? "" },
-                set: { selectedBundleId = $0.isEmpty ? nil : $0 }
-            ))
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .padding(12)
-            .background(Color(.secondarySystemGroupedBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .padding(.horizontal, 24)
         }
     }
 

@@ -1,5 +1,8 @@
 import Foundation
 import DeviceActivity
+import FamilyControls
+import ManagedSettings
+import CryptoKit
 import os
 
 /// Single source of truth for what Nudge monitors and when it re-registers.
@@ -17,9 +20,25 @@ import os
 /// silent after its first triggered day. Three independent recovery paths re-arm it
 /// (extension `intervalDidStart`, extension `eventDidReachThreshold`, and app
 /// foreground), all bounded by the same idempotent day stamp so none of them can loop.
+///
+/// **Catalog vs. active set (Phase 3 G6/G7):** the App Group holds the *catalog* —
+/// every goal the user has, plus the session-timeout pseudo-goal — unfiltered. Each
+/// registration filters it down to the goals *active today* (daily frequency, inside
+/// any temporary date range). Persisting the unfiltered catalog is what lets the
+/// extension arm a temporary goal on its first day, or drop an expired one, at
+/// midnight with the app never opened.
+///
+/// **Adding weekly goals later:** weekly goals need their own `DeviceActivityName` and
+/// a weekly repeating schedule. The intended shape is a second activity whose active set
+/// is `activeSummaries(in:frequency: .weekly, …)`, registered alongside the daily one;
+/// the catalog, naming, dedup, and signature logic are already frequency-agnostic.
 enum MonitoringPlan {
 
     static let activityName = DeviceActivityName("nudge.daily")
+
+    /// Apple does not document a hard cap on events per activity. Each goal costs 10
+    /// events, so warn well before a plausible limit to make a silent failure visible.
+    static let eventCountWarningThreshold = 200
 
     private static let logger = Logger(subsystem: "com.joshuaqn.Nudge", category: "MonitoringPlan")
 
@@ -37,42 +56,123 @@ enum MonitoringPlan {
 
     // MARK: - Composition
 
-    /// Builds the complete monitored set: the user's goals plus the session-timeout
-    /// pseudo-goal. This is the only place session timeout becomes a `GoalSummary`,
-    /// so the registered events and the App Group copy the extension reads can
-    /// never disagree about what is being monitored.
-    static func composeSummaries(goals: [GoalSummary], sessionTimeoutMinutes: Int?) -> [GoalSummary] {
+    /// The session-timeout pseudo-goal. This is the only place session timeout becomes a
+    /// `GoalSummary`, so the registered events and the App Group copy the extension reads
+    /// can never disagree about it.
+    static func sessionTimeoutSummary(minutes: Int) -> GoalSummary {
+        GoalSummary(
+            goalId: 0,
+            eventName: sessionTimeoutEventName,
+            limitSeconds: minutes * 60,
+            targetLabel: "Session",
+            targetType: .total
+        )
+    }
+
+    /// The full, unfiltered monitored catalog persisted to the App Group: every goal plus
+    /// the session-timeout pseudo-goal when configured.
+    static func catalog(goals: [GoalSummary], sessionTimeoutMinutes: Int?) -> [GoalSummary] {
         var summaries = goals
         if let minutes = sessionTimeoutMinutes, minutes > 0 {
-            summaries.append(
-                GoalSummary(
-                    goalId: 0,
-                    eventName: "session.timeout",
-                    limitSeconds: minutes * 60,
-                    targetLabel: "Session",
-                    appBundleId: nil
-                )
-            )
+            summaries.append(sessionTimeoutSummary(minutes: minutes))
         }
         return summaries
     }
 
-    /// Builds the `DeviceActivityEvent` set for the given summaries.
+    /// Whether a catalog entry is monitored by the daily activity on `day` (`yyyy-MM-dd`).
+    /// Day strings are zero-padded ISO dates, so string order is date order. A missing
+    /// bound is open-ended; both bounds are inclusive.
+    static func isActive(_ summary: GoalSummary, onDay day: String, frequency: GoalFrequency = .daily) -> Bool {
+        guard summary.frequency == frequency else { return false }
+        if let start = summary.startDate, day < start { return false }
+        if let end = summary.endDate, day > end { return false }
+        return true
+    }
+
+    /// The subset of `catalog` to register today, by the local calendar day.
+    static func activeSummaries(
+        in catalog: [GoalSummary],
+        now: Date,
+        calendar: Calendar,
+        frequency: GoalFrequency = .daily
+    ) -> [GoalSummary] {
+        let day = dayStamp(for: now, calendar: calendar)
+        return catalog.filter { isActive($0, onDay: day, frequency: frequency) }
+    }
+
+    /// Today's monitored set: the user's daily goals active today plus the session-timeout
+    /// pseudo-goal.
+    static func composeSummaries(
+        goals: [GoalSummary],
+        sessionTimeoutMinutes: Int?,
+        today: Date,
+        calendar: Calendar
+    ) -> [GoalSummary] {
+        activeSummaries(
+            in: catalog(goals: goals, sessionTimeoutMinutes: sessionTimeoutMinutes),
+            now: today,
+            calendar: calendar
+        )
+    }
+
+    // MARK: - Events
+
+    /// Builds the `DeviceActivityEvent` set for an already-filtered active set.
     ///
-    /// App- and category-scoped goals are skipped: they need an `ApplicationToken`
-    /// that only `FamilyActivityPicker` can supply (ADR-042, Phase 3).
+    /// - Total goals and session timeout: no app filter (all usage).
+    /// - App / category goals: the tokens in their decoded selection. A goal whose
+    ///   selection is missing, undecodable, or empty is skipped and logged — an empty
+    ///   token set would otherwise silently monitor *all* usage.
     static func events(for summaries: [GoalSummary]) -> [DeviceActivityEvent.Name: DeviceActivityEvent] {
         var events: [DeviceActivityEvent.Name: DeviceActivityEvent] = [:]
         for summary in summaries {
-            guard summary.eventName == "total" || summary.eventName == "session.timeout" else { continue }
-            events[DeviceActivityEvent.Name(summary.eventName)] = DeviceActivityEvent(
-                applications: [],
-                categories: [],
-                webDomains: [],
-                threshold: thresholdComponents(summary.limitSeconds)
-            )
+            guard let filter = tokenFilter(for: summary) else { continue }
+            for spec in eventSpecs(for: summary) {
+                events[DeviceActivityEvent.Name(spec.name)] = DeviceActivityEvent(
+                    applications: filter.applications,
+                    categories: filter.categories,
+                    webDomains: filter.webDomains,
+                    threshold: thresholdComponents(spec.thresholdSeconds)
+                )
+            }
+        }
+        if events.count > eventCountWarningThreshold {
+            logger.warning("registering \(events.count) events — above the \(eventCountWarningThreshold) warning threshold")
         }
         return events
+    }
+
+    private struct TokenFilter {
+        var applications: Set<ApplicationToken> = []
+        var categories: Set<ActivityCategoryToken> = []
+        var webDomains: Set<WebDomainToken> = []
+    }
+
+    /// `nil` means "skip this summary".
+    private static func tokenFilter(for summary: GoalSummary) -> TokenFilter? {
+        if summary.isSessionTimeout { return TokenFilter() }
+        switch summary.targetType {
+        case .total:
+            return TokenFilter()
+        case .app, .category:
+            guard let data = summary.selectionData else {
+                logger.error("goal \(summary.goalId) has no selection — skipped (re-select required)")
+                return nil
+            }
+            guard let selection = SelectionCodec.decode(data: data) else {
+                logger.error("goal \(summary.goalId) selection failed to decode — skipped (re-select required)")
+                return nil
+            }
+            guard !SelectionCodec.isEmpty(selection) else {
+                logger.error("goal \(summary.goalId) selection is empty — skipped (would monitor all usage)")
+                return nil
+            }
+            return TokenFilter(
+                applications: selection.applicationTokens,
+                categories: selection.categoryTokens,
+                webDomains: selection.webDomainTokens
+            )
+        }
     }
 
     private static func thresholdComponents(_ seconds: Int) -> DateComponents {
@@ -88,15 +188,31 @@ enum MonitoringPlan {
         return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
     }
 
-    /// Order-independent fingerprint of the monitored set. Sorting matters: goal
-    /// rows come back from Supabase in arbitrary order, and an order-sensitive
-    /// signature would re-register (and so reset the day's counters) on every
-    /// foreground.
+    /// Bumped whenever what a registration contains changes shape (e.g. milestone
+    /// naming), so upgraded installs re-register once.
+    private static let signatureVersion = "v2"
+
+    /// Order-independent fingerprint of the active set. Sorting matters: goal rows come
+    /// back from Supabase in arbitrary order, and an order-sensitive signature would
+    /// re-register (and so reset the day's counters) on every foreground.
+    ///
+    /// Each entry covers everything that changes the registered events: identity, target
+    /// type, limit, and a fingerprint of the selection bytes — so editing a category's
+    /// apps re-registers even when the limit is unchanged. Dates and frequency are not
+    /// included: they only decide *whether* a goal is in the active set.
     static func signature(for summaries: [GoalSummary]) -> String {
-        summaries
-            .map { "\($0.eventName)=\($0.limitSeconds)" }
+        let entries = summaries
+            .map { "\($0.eventName)|\($0.targetType.rawValue)|\($0.limitSeconds)|\(selectionFingerprint($0.selectionData))" }
             .sorted()
-            .joined(separator: "|")
+        return ([signatureVersion] + entries).joined(separator: ";")
+    }
+
+    /// SHA-256 hex of the stored selection bytes, or "-" when there is none. Hashes the
+    /// persisted bytes rather than re-encoding the selection, because encoding a `Set`
+    /// is not byte-stable across launches.
+    static func selectionFingerprint(_ data: Data?) -> String {
+        guard let data else { return "-" }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Registration decision
@@ -151,6 +267,7 @@ enum MonitoringPlan {
         return triggers
     }
 
+    /// Reads the persisted catalog (unfiltered).
     static func loadSummaries(from defaults: UserDefaults?) -> [GoalSummary] {
         guard let data = defaults?.data(forKey: AppGroupKeys.goalsActive),
               let summaries = try? JSONDecoder().decode([GoalSummary].self, from: data) else {
@@ -159,12 +276,26 @@ enum MonitoringPlan {
         return summaries
     }
 
+    /// Writes the catalog without registering. The app calls this whenever it has
+    /// freshly fetched data, so the extension's midnight re-arm sees edits that did not
+    /// change today's active set (e.g. a temporary goal starting tomorrow).
+    ///
+    /// Callers must pass data they actually fetched — never an empty array standing in
+    /// for a failed request (ADR-055).
+    static func persistCatalog(_ catalog: [GoalSummary], defaults: UserDefaults?) {
+        guard let defaults else { return }
+        guard let data = try? JSONEncoder().encode(catalog) else {
+            logger.error("failed to encode goal catalog")
+            return
+        }
+        defaults.set(data, forKey: AppGroupKeys.goalsActive)
+    }
+
     // MARK: - Registration
 
-    /// Stops and restarts monitoring for `activityName`, persists the monitored set
-    /// to the App Group for the extension, and records the day/signature stamps.
-    ///
-    /// `summaries` must already be composed via `composeSummaries`.
+    /// Stops and restarts monitoring for `activityName` with today's active subset of
+    /// `catalog`, persists the full catalog to the App Group for the extension, and
+    /// records the day/signature stamps. Returns the number of events registered.
     ///
     /// **Stamps are written before `startMonitoring` runs, deliberately.** Restarting
     /// monitoring while its interval is active provokes another `intervalDidStart`,
@@ -173,18 +304,19 @@ enum MonitoringPlan {
     /// failure the previous stamps are restored so the next opportunity retries.
     @discardableResult
     static func register(
-        summaries: [GoalSummary],
+        catalog: [GoalSummary],
         defaults: UserDefaults?,
         now: Date,
         calendar: Calendar,
         startMonitoring: (DeviceActivitySchedule, [DeviceActivityEvent.Name: DeviceActivityEvent]) throws -> Void
     ) throws -> Int {
-        let events = events(for: summaries)
+        let active = activeSummaries(in: catalog, now: now, calendar: calendar)
+        let events = events(for: active)
         let previousDay = defaults?.string(forKey: AppGroupKeys.lastRegisteredDay)
         let previousSignature = defaults?.string(forKey: AppGroupKeys.lastRegisteredSignature)
 
         defaults?.set(dayStamp(for: now, calendar: calendar), forKey: AppGroupKeys.lastRegisteredDay)
-        defaults?.set(signature(for: summaries), forKey: AppGroupKeys.lastRegisteredSignature)
+        defaults?.set(signature(for: active), forKey: AppGroupKeys.lastRegisteredSignature)
 
         do {
             try startMonitoring(schedule(), events)
@@ -194,33 +326,31 @@ enum MonitoringPlan {
             throw error
         }
 
-        if let defaults, let data = try? JSONEncoder().encode(summaries) {
-            defaults.set(data, forKey: AppGroupKeys.goalsActive)
-        }
+        persistCatalog(catalog, defaults: defaults)
 
-        logger.log("registered monitoring — \(events.count) event(s), \(summaries.count) summary(ies)")
+        logger.log("registered monitoring — \(events.count) event(s), \(active.count) active of \(catalog.count) in catalog")
         return events.count
     }
 
     /// Convenience overload driving a real `DeviceActivityCenter`.
     @discardableResult
     static func register(
-        summaries: [GoalSummary],
+        catalog: [GoalSummary],
         center: DeviceActivityCenter,
         defaults: UserDefaults?,
         now: Date,
         calendar: Calendar
     ) throws -> Int {
-        try register(summaries: summaries, defaults: defaults, now: now, calendar: calendar) { schedule, events in
+        try register(catalog: catalog, defaults: defaults, now: now, calendar: calendar) { schedule, events in
             center.stopMonitoring([activityName])
             try center.startMonitoring(activityName, during: schedule, events: events)
         }
     }
 
-    /// Re-registers from the App Group copy of the monitored set, but only when
-    /// `shouldRegister` says it is needed. This is the path the monitor extension
-    /// uses: it runs with no main app process and no network, so the last set the
-    /// app persisted is the best available source of truth.
+    /// Re-registers from the App Group catalog, but only when `isRegistrationStale` says
+    /// it is needed. This is the path the monitor extension uses: it runs with no main
+    /// app process and no network, so the last catalog the app persisted is the best
+    /// available source of truth.
     @discardableResult
     static func reregisterFromAppGroupIfNeeded(
         center: DeviceActivityCenter,
@@ -228,14 +358,14 @@ enum MonitoringPlan {
         now: Date,
         calendar: Calendar
     ) -> Bool {
-        let summaries = loadSummaries(from: defaults)
-        guard !summaries.isEmpty else {
+        let catalog = loadSummaries(from: defaults)
+        guard !catalog.isEmpty else {
             logger.error("no goal summaries in App Group — skipping re-registration")
             return false
         }
 
         let today = dayStamp(for: now, calendar: calendar)
-        let sig = signature(for: summaries)
+        let sig = signature(for: activeSummaries(in: catalog, now: now, calendar: calendar))
         let stale = isRegistrationStale(
             lastDay: defaults?.string(forKey: AppGroupKeys.lastRegisteredDay),
             lastSignature: defaults?.string(forKey: AppGroupKeys.lastRegisteredSignature),
@@ -245,7 +375,7 @@ enum MonitoringPlan {
         guard stale else { return false }
 
         do {
-            try register(summaries: summaries, center: center, defaults: defaults, now: now, calendar: calendar)
+            try register(catalog: catalog, center: center, defaults: defaults, now: now, calendar: calendar)
             return true
         } catch {
             logger.error("re-registration failed: \(error.localizedDescription, privacy: .public)")

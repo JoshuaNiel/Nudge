@@ -19,6 +19,10 @@ enum AppGroupKeys {
     static let userFirstName = "nudge.user.firstName"
 
     // MARK: - Goals (main app → DeviceActivityMonitor extension)
+    /// JSON-encoded [GoalSummary]: the full, *unfiltered* monitored catalog (all goals +
+    /// the session-timeout pseudo-goal). `MonitoringPlan` filters it to today's active
+    /// set at each registration. The key name predates the catalog and is kept so App
+    /// Group data from earlier versions is still found.
     static let goalsActive = "nudge.goals.active"
 
     // MARK: - Friends (main app → DeviceActivityMonitor extension)
@@ -42,15 +46,18 @@ enum AppGroupKeys {
     /// Set by DeviceActivityMonitor.intervalDidEnd; cleared by main app on next foreground.
     static let midnightSyncNeeded = "nudge.sync.midnightNeeded"
 
-    // MARK: - FamilyActivitySelection storage (main app → MonitoringRegistrationService)
-    // Stored as PropertyList-encoded FamilyActivitySelection.
-    // Written when the user picks an app goal target via FamilyActivityPicker (Phase 3).
-    static func appSelectionKey(_ bundleId: String) -> String {
-        "nudge.selection.app.\(bundleId)"
-    }
-    static func categorySelectionKey(_ categoryId: Int) -> String {
-        "nudge.selection.category.\(categoryId)"
-    }
+    // MARK: - Goal progress + dedup (monitor extension → main app), Phase 3 G4
+    // Day-scoped by the local calendar day ("yyyy-MM-dd"); pruned by GoalProgressStore.
+    static let progressKeyPrefix = "nudge.progress."
+    static let firedKeyPrefix    = "nudge.fired."
+
+    /// JSON `{"<goalId>": highestPercent}` for `day`. Written by the monitor extension,
+    /// read by the app's Goals list.
+    static func progressKey(day: String) -> String { progressKeyPrefix + day }
+
+    /// JSON `[eventName]` of milestone/session events whose side effects already ran on
+    /// `day`. Read and written by the monitor extension only.
+    static func firedKey(day: String) -> String { firedKeyPrefix + day }
 }
 
 // MARK: - Background Task Identifiers

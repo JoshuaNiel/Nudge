@@ -1,190 +1,168 @@
-# Phase 3 — Goals
+# Phase 3 — Goals (v2: tokens + milestones)
 
-**Status:** `[ ] Ready to start`
+**Status:** `[ ] Spec v2 — approved 2026-11-14; 3a in progress`
 
-**Goal:** Let users create time-limit goals for apps, custom categories, or total usage. Show progress toward each goal. Evaluate goals against usage data when Phase 1 is complete.
+**Supersedes** the v1 spec, which assumed goal progress came from the Supabase `usage`
+table. That table is never populated: Screen Time data cannot leave the
+`DeviceActivityReport` sandbox (ADR-049). App goals also cannot use bundle IDs, because
+`DeviceActivityEvent` only accepts opaque `ApplicationToken`s, which come from
+`FamilyActivityPicker` (ADR-042).
+
+**Goal:** Users create daily time limits for one app, for a named category (a group of apps
+and/or Apple categories), or for total screen time. They see progress in two forms:
+**approximate progress** in 10% steps, which the app can reason about, and the **exact
+usage**, drawn by the report extension.
 
 ---
 
-## Prerequisites
+## Key decisions
 
-- [x] Auth complete
-- [x] DB schema deployed (`goal`, `app_category`, `app_category_member` tables)
-- [ ] `Goal.swift` model updated (task below)
-- [ ] Phase 1 complete for live goal progress — can show goals UI and mock progress beforehand
+| # | Decision | Why |
+|---|---|---|
+| G1 | App and category targets are stored as a `FamilyActivitySelection`, PropertyList-encoded then base64, in a new `selection text` column. App goal → `goal.selection` (exactly 1 application token). Category → `app_category.selection` (≥1 app or Apple category token). | Tokens are the only identifier `DeviceActivityEvent` accepts. Storing them server-side survives reinstalls and keeps the App Group a cache rather than the only copy. |
+| G2 | App goals get a user-typed **label** (`goal.label`, e.g. "Instagram"). Category goals use `app_category.name`. Total goals use "All Apps". | The main app and the monitor extension cannot turn a token into a name. Only `Label(token)` inside a SwiftUI view can display one. SMS nudges need a real string. |
+| G3 | **Milestone events:** every monitored goal registers events at 10%, 20% … 100% of its limit, named `goal.<id>.p<NN>` (e.g. `goal.42.p50`). This replaces the `app.<bundle>` / `category.<id>` / `total` names from ADR-036 for goals. `session.timeout` is unchanged. | The extension can't read usage directly; milestone thresholds are the only signal it gets, and it can write that signal to the App Group. 10% is a constant in `MonitoringPlan` (`milestoneStepPercent`). |
+| G4 | The extension records milestones in the App Group as `nudge.progress.<yyyy-MM-dd>` → `{goalId: highestPercent}`. Each milestone **fires its side effects at most once per goal per day** (dedup key `nudge.fired.<yyyy-MM-dd>` → set of event names). | Re-registering mid-day (after a goal edit) restarts counting, so milestones can fire again. Without dedup that would mean duplicate nudges. Progress keeps the max. Keys older than 2 days are pruned at `intervalDidStart`. |
+| G5 | Side effects: p10–p90 → record progress only (Phase 4 adds why-reminders). **p100 = goal reached** → record, post a local "limit reached" notification, and enqueue a goal-breach nudge if goal-breach nudges are enabled (5E; until 5E lands, always enqueue, matching current behaviour). | One place decides what each milestone does. |
+| G6 | **Daily goals only** in 3a/3b. **Weekly** follows as its own PR (separate repeating weekly schedule + re-arm, week start from `profile.week_start`); **monthly** stays in the backlog because one interval cannot exceed Apple's maximum (`intervalTooLong`). Keep `MonitoringPlan` structured so a second activity per frequency can be added. The UI offers no weekly/monthly option, and `MonitoringPlan` skips non-daily goals. The enum and DB keep all three values. | The schedule is a repeating daily interval. Weekly/monthly thresholds would need separate multi-day schedules, which can come later (backlog). |
+| G7 | **Temporary goals** (start/end dates) are monitored only on days inside their range. `GoalSummary` gains `startDate`/`endDate` (`yyyy-MM-dd`, optional), and `MonitoringPlan.composeSummaries` filters by today's date. | The extension re-registers at midnight using the App Group copy, so the date filter has to live in shared code. Otherwise an expired goal would keep firing until the app is opened. |
+| G8 | **Exact usage** comes from a second report context, `goalUsage` (`DeviceActivityReport.Context("GoalUsage")`). It's shown on a Goal detail screen using `DeviceActivityFilter(segment: .daily(today), applications:, categories:)` built from the goal's selection (no apps = total). The extension renders "47m used today". The host app draws the limit and milestone bar around it. | The extension can't receive the limit (no App Group reads guaranteed), and only the extension can see exact numbers. |
+| G9 | Goal edits re-register monitoring through `MonitoringRegistrationService.goalDidChange` (debounced **1.5 s**, per ADR-035; the code says 10 s and gets fixed). | Fixes the "goalDidChange has no caller" backlog item. |
+| G10 | Categories are managed from the **Apps** tab, renamed **"Categories"**: list, create (name + color + picker), edit selection, delete. The `app` and `app_category_member` tables are no longer used (kept in the schema, marked deprecated, like `usage`). | The Apps tab is an empty stub, and categories are now picker selections, not bundle-ID membership rows. |
 
 ---
 
-## Tasks
+## Data
+
+### Migration `006_goal_selection.sql`
+```sql
+alter table public.goal         add column selection text, add column label varchar(100);
+alter table public.app_category add column selection text;
+
+-- app goals: selection + label instead of bundle_id
+alter table public.goal drop constraint goal_target_check;
+alter table public.goal add constraint goal_target_check check (
+  (target_type = 'app'      and selection is not null and category_id is null) or
+  (target_type = 'category' and category_id is not null and selection is null) or
+  (target_type = 'total'    and selection is null and category_id is null)
+);
+alter table public.goal add constraint goal_label_not_blank
+  check (label is null or char_length(btrim(label)) > 0);
+alter table public.goal add constraint goal_app_label_required
+  check (target_type <> 'app' or label is not null);
+```
+`bundle_id` stays nullable and unused. The duplicate-goal unique index (ADR-010) is
+re-checked by the implementer: two app goals for different apps must not collide just
+because `bundle_id` is NULL. If the index includes `bundle_id`, it is replaced so it is
+keyed on (`user_id`, `target_type`, `category_id`, `selection` hash, `frequency`) for
+non-temporary goals.
 
 ### Models
-- [ ] Update `Goal.swift` to match `goal` table schema:
-  ```swift
-  struct Goal: Codable, Identifiable {
-      let id: Int
-      let userId: UUID           // user_id
-      let limitSeconds: Int      // limit_seconds
-      let frequency: GoalFrequency
-      let targetType: GoalTargetType  // target_type
-      let bundleId: String?      // bundle_id — set when targetType = .app
-      let categoryId: Int?       // category_id — set when targetType = .category
-      let temporary: Bool
-      let startDate: String?     // start_date "YYYY-MM-DD"
-      let endDate: String?       // end_date "YYYY-MM-DD"
-  }
-  
-  enum GoalFrequency: String, Codable { case daily, weekly, monthly }
-  enum GoalTargetType: String, Codable { case app, category, total }
-  ```
+- `Goal` gains `selection: String?`, `label: String?`.
+- `AppCategory` gains `selection: String?`.
+- `GoalSummary` (Shared) gains `startDate`, `endDate`, `frequency`, and
+  `selectionData: Data?` (decoded token set for app/category goals; category goals carry
+  the category's selection). It stays backward-compatible when decoding old App Group
+  JSON (`decodeIfPresent`).
+- A pure `SelectionCodec` (Shared) encodes/decodes `FamilyActivitySelection` ↔ base64,
+  unit-tested with an empty selection round trip.
 
-- [ ] Add `AppCategory` model:
-  ```swift
-  struct AppCategory: Codable, Identifiable {
-      let id: Int
-      let userId: UUID   // user_id
-      let name: String
-      let color: String  // hex "#RRGGBB"
-  }
-  ```
-
-- [ ] Add `AppCategoryMember` model:
-  ```swift
-  struct AppCategoryMember: Codable {
-      let bundleId: String    // bundle_id
-      let categoryId: Int     // category_id
-  }
-  ```
-
-### Service Layer
-- [ ] Create `GoalService`:
-  ```swift
-  class GoalService {
-      func fetchGoals(userId: UUID) async throws -> [Goal]
-      func createGoal(_ goal: GoalInsert) async throws
-      func deleteGoal(id: Int) async throws
-  }
-  
-  struct GoalInsert: Encodable {
-      let userId: UUID
-      let limitSeconds: Int
-      let frequency: GoalFrequency
-      let targetType: GoalTargetType
-      let bundleId: String?
-      let categoryId: Int?
-      let temporary: Bool
-      let startDate: String?
-      let endDate: String?
-  }
-  ```
-
-- [ ] Create `CategoryService`:
-  ```swift
-  class CategoryService {
-      func fetchCategories(userId: UUID) async throws -> [AppCategory]
-      func createCategory(userId: UUID, name: String, color: String) async throws -> AppCategory
-      func deleteCategory(id: Int) async throws
-      func addApp(bundleId: String, categoryId: Int) async throws
-      func removeApp(bundleId: String, categoryId: Int) async throws
-      func fetchMembers(categoryId: Int) async throws -> [String]  // returns bundle IDs
-  }
-  ```
-
-- [ ] Create `GoalEvaluationService` (depends on Phase 1 data):
-  ```swift
-  class GoalEvaluationService {
-      // Returns seconds used in the goal's current window (daily/weekly/monthly)
-      func fetchUsedSeconds(goal: Goal, userId: UUID, timeZone: TimeZone, weekStart: Int) async throws -> Int
-  }
-  ```
-  - For `daily`: sum `usage.seconds` where `date = today`
-  - For `weekly`: sum where `date` is between current week start and today (using `weekStart` from profile)
-  - For `monthly`: sum where `date` is in current calendar month
-
-### Goals ViewModel & View
-- [ ] Create `GoalsViewModel`
-  - `@Published var goals: [GoalWithProgress]`
-  - `@Published var isLoading: Bool`
-  - `func load() async`
-  - `func deleteGoal(_ goal: Goal) async`
-
-  ```swift
-  struct GoalWithProgress {
-      let goal: Goal
-      let usedSeconds: Int    // from GoalEvaluationService (0 until Phase 1 complete)
-      var progressFraction: Double { min(Double(usedSeconds) / Double(goal.limitSeconds), 1.0) }
-      var isExceeded: Bool { usedSeconds >= goal.limitSeconds }
-  }
-  ```
-
-- [ ] Replace `GoalsView` stub:
-  - List of active goals, each showing target name, used/limit (e.g. "1h 23m / 2h"), progress bar
-  - "Add Goal" button → sheet
-
-- [ ] Goal creation sheet:
-  - Step 1: Choose target type (App / Category / Total)
-  - Step 2 (if App): Pick from list of apps seen in usage data (`app` table)
-  - Step 2 (if Category): Pick from user's categories or create new
-  - Step 3: Set limit (time picker — hours + minutes)
-  - Step 4: Set frequency (Daily / Weekly / Monthly)
-  - Step 4b: Toggle temporary goal → date range picker
-  - Confirm → calls `GoalService.createGoal`
-
-### App Category Management
-- [ ] Category list in Settings (or Goals tab)
-- [ ] Create category: name + color picker
-- [ ] Add/remove apps from a category (pick from `app` table)
-- [ ] Delete category (cascades to members and goals via DB)
+### App Group keys (new)
+| Key | Written by | Read by |
+|---|---|---|
+| `nudge.progress.<day>` | monitor ext | app (Goals list) |
+| `nudge.fired.<day>` | monitor ext | monitor ext (dedup) |
 
 ---
 
-## Data Contracts
+## UI
 
-### Supabase — fetch goals
-```swift
-supabase
-    .from("goal")
-    .select()
-    .eq("user_id", value: userId)
-    .execute()
-```
+**Goals tab:** a list of goals. Each row shows the target (`Label(token)` icon + label for app
+goals, color dot + name for categories, "All Apps" for total), the limit ("2h / day"),
+and a 10-step progress bar from `nudge.progress.<today>` with the caption "≈ 50% used" ("Limit
+reached" at 100%). The progress bar refreshes on foreground. Tapping a row opens **Goal
+detail**: an exact-usage report view (G8), the limit, the milestone bar, temporary dates if
+any, and delete. Swipe-to-delete still works.
 
-### Supabase — create goal
-```swift
-supabase
-    .from("goal")
-    .insert(goalInsert)
-    .execute()
-```
+**Add Goal sheet:** target type → (App: `FamilyActivityPicker` restricted to exactly one
+app, plus a required "Name" field, prefilled empty with the placeholder "e.g. Instagram" | Category:
+pick an existing one or "New category…" | Total) → limit (hours + minutes, minimum 5 min) →
+optional temporary range. No frequency picker (daily only). Save → `createGoal` →
+`goalDidChange`.
 
-### Supabase — evaluate daily goal
-```swift
-supabase
-    .from("usage")
-    .select("seconds")
-    .eq("user_id", value: userId)
-    .eq("date", value: todayString)
-    // if targetType = .app: also .eq("app_id", value: bundleId)
-    // if targetType = .category: also .in("app_id", values: memberBundleIds)
-    // if targetType = .total: no additional filter
-    .execute()
-// Sum all returned seconds client-side
-```
+**Categories tab:** a list of categories with a color dot and "N apps, M categories". Create/edit
+sheet: name (required, unique per user; DB error → "You already have a category with this
+name"), color (preset palette of 8 hex colors), `FamilyActivityPicker` (≥1 token
+required). Deleting asks for confirmation and states that goals using the category are
+deleted too (DB cascade). Editing a category's selection triggers `goalDidChange`.
 
----
+## Edge cases
+- Screen Time not authorized → Goals and Categories show a "Screen Time access required"
+  state with a Settings link instead of the picker.
+- A selection that fails to decode (e.g. a token from another device) → the goal is shown
+  with "Re-select app", is skipped by `MonitoringPlan`, and is logged.
+- Duplicate non-temporary goal → friendly error (ADR-010).
+- Progress keys missing (new day, extension hasn't fired) → bar at 0%, caption "Under 10%".
+- Deleting a goal removes its progress entry at the next prune. The UI ignores unknown ids.
 
-## Open Questions
+## Acceptance criteria
+- [ ] Create app, category and total daily goals. Each registers 10 milestone events.
+- [ ] Goal list shows 10%-step progress written by the extension. Goal detail shows exact usage.
+- [ ] p100 posts a "limit reached" notification and enqueues a goal-breach nudge, at most once a day.
+- [ ] Temporary goals are monitored only inside their date range, including after midnight with the app closed.
+- [ ] Editing goals or categories re-registers within ~1.5 s, without duplicate notifications.
+- [ ] Category CRUD works. Deleting a category removes its goals.
+- [x] All pure logic (milestone event names/thresholds, composition with date filter, progress
+      decode/merge/prune, dedup, selection codec, label rules) is unit-tested. (3a)
 
-> None blocking for UI work. Goal evaluation requires Phase 1 data.
+## 3a implementation notes (decisions made while implementing)
 
----
+- **Catalog vs. active set.** `nudge.goals.active` now holds the *unfiltered* catalog
+  (every goal + the session-timeout pseudo-goal). `MonitoringPlan.register` filters it to
+  today's active set (daily + inside the temporary range) on every registration. Without
+  this the extension could never arm a temporary goal on its first day at midnight.
+  `refreshMonitoring` persists the freshly fetched catalog even when it does not
+  re-register, so an edit that does not touch today's set (e.g. a goal starting tomorrow)
+  reaches the extension without resetting today's counters.
+- **Signature** = `v2;` + sorted `eventName|targetType|limitSeconds|sha256(selectionData)`
+  over the *active* set. The selection fingerprint makes a category edit re-register even
+  if the limit is unchanged. The `v2` tag makes upgraded installs re-register once.
+- **Event names** `goal.<id>.p<NN>`, no zero padding. Thresholds are
+  `max(1, limit * NN / 100)` (floored; p100 exact). Parsing accepts canonical names only.
+- **Skipped goals.** App/category goals with a missing, undecodable *or empty* selection
+  are skipped and logged — an empty token set would otherwise monitor all usage.
+- **Session timeout** is `GoalSummary(goalId: 0, eventName: "session.timeout",
+  targetType: .total)` and is deduped once per day like milestones.
+- **Decision logic in Shared.** `ThresholdRouter.route` (parse → match → dedup → progress)
+  is unit-tested; the extension only runs side effects. Phase 4 hooks into
+  `handleMilestone`; Phase 5E's toggle replaces `shouldSendGoalBreachNudge`.
+- **`goalDidChange()`** takes no arguments: after 1.5 s it fetches goals + session
+  timeout itself (`MonitoringInputsLoading`) and calls `refreshMonitoring`. A failed fetch
+  never registers (ADR-055). Use `MonitoringRegistrationService.shared` so all screens
+  share one debounce window; ViewModels depend on `MonitoringRegistrationServiceProtocol`.
+- **Pruning** keeps today and the two previous days; malformed progress/fired keys are
+  removed.
+- **Migration 006** deletes legacy app goals with no selection (they could never be
+  monitored and would violate the new target check) and replaces the app unique index with
+  `(user_id, md5(selection), frequency)` — best effort, since re-picking an app can yield
+  different token bytes. Selections are capped at 131072 chars.
+- **Interim UI (until 3b):** the Add Goal sheet's "Specific App" option is disabled
+  ("Coming soon"); the bundle-ID text field is gone.
 
-## Acceptance Criteria
+### 3a checklist
+- [x] Migration `006_goal_selection.sql` (written; run manually in the SQL editor)
+- [x] `Goal`/`AppCategory`/`GoalInsert` gain `selection`/`label`; enums moved to `Shared/`
+- [x] `GoalSummary` gains `targetType`, `frequency`, `startDate`, `endDate`, `selectionData` (backward-compatible decode)
+- [x] `SelectionCodec`
+- [x] `MonitoringPlan` milestones, date/frequency filter, selection-aware signature
+- [x] `GoalProgressStore` (progress merge, dedup, prune) + `AppGroupKeys` builders
+- [x] Monitor extension: dedup, progress, p100 notification + nudge, prune at `intervalDidStart`
+- [x] `GoalService.fetchGoalSummaries` reads selection/label/category selection
+- [x] `goalDidChange()` 1.5 s debounce, self-fetching (not yet wired to UI — 3b)
+- [ ] On-device verification (see 3b)
 
-- [ ] User can create an app goal, category goal, and total usage goal
-- [ ] User can set daily, weekly, or monthly frequency
-- [ ] User can create a temporary goal with a date range
-- [ ] Goals list shows each goal's progress (used / limit) and a progress bar
-- [ ] Deleting a goal removes it from Supabase and the UI immediately
-- [ ] Creating a duplicate non-temporary goal (same target + frequency) fails gracefully with a user-facing error
-- [ ] User can create, rename (color), and delete custom app categories
-- [ ] User can add and remove apps from a category
+## PR split
+- **3a `feat/goals-core`**: migration 006, models, `SelectionCodec`, `MonitoringPlan` milestones + date
+  filter, monitor extension progress/dedup/p100, `goalDidChange` debounce fix, tests.
+- **3b `feat/goals-ui`**: Goals list/detail, Add Goal sheet with picker, Categories tab,
+  `goalUsage` report context, wiring `goalDidChange`.

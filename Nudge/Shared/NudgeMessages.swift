@@ -49,22 +49,34 @@ enum NudgeMessages {
         return "\(userName)'s screen time yesterday: \(totalStr). Top apps: \(appLines)."
     }
 
+    // MARK: - Limit reached (local notification on the user's own device)
+
+    static func limitReachedTitle(label: String) -> String {
+        "You've hit your \(label) limit"
+    }
+
+    static func limitReachedBody(label: String, limitSeconds: Int) -> String {
+        "You set a \(limitSeconds.formattedDuration) daily limit on \(label)."
+    }
+
     // MARK: - Convenience: compose from GoalSummary
 
-    /// Returns the appropriate message for the goal that just fired.
+    /// Returns the SMS report for the goal (or session timeout) that just fired.
+    /// Switches on `targetType`: since Phase 3a event names are `goal.<id>.pNN` and no
+    /// longer encode the target.
     static func reportForGoal(userName: String, goalSummary: GoalSummary) -> String {
         let limitMinutes = goalSummary.limitSeconds / 60
 
-        if goalSummary.eventName == "session.timeout" {
+        if goalSummary.isSessionTimeout {
             return sessionTimeout(userName: userName, minutes: limitMinutes)
         }
-        if goalSummary.eventName.hasPrefix("app.") {
+        switch goalSummary.targetType {
+        case .app:
             return goalBreachApp(userName: userName, limitMinutes: limitMinutes, appName: goalSummary.targetLabel)
-        }
-        if goalSummary.eventName.hasPrefix("category.") {
+        case .category:
             return goalBreachCategory(userName: userName, limitMinutes: limitMinutes, categoryName: goalSummary.targetLabel)
+        case .total:
+            return goalBreachTotal(userName: userName, limitMinutes: limitMinutes)
         }
-        // default: total
-        return goalBreachTotal(userName: userName, limitMinutes: limitMinutes)
     }
 }

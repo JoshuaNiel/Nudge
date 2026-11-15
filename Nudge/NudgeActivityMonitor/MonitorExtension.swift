@@ -8,10 +8,13 @@
 // 3. NSExtensionPrincipalClass = $(PRODUCT_MODULE_NAME).NudgeMonitor
 //
 // SHARED TYPES:
-// GoalSummary, PendingTrigger, AppGroupKeys, NudgeMessages and MonitoringPlan all
-// come from the `Shared/` folder, which is compiled into this target as well as
-// the main app. Do not re-declare them here — a private copy that drifts from the
-// app's version silently disarms monitoring.
+// GoalSummary, PendingTrigger, AppGroupKeys, NudgeMessages, MonitoringPlan,
+// GoalProgressStore and ThresholdRouter all come from the `Shared/` folder, which is
+// compiled into this target as well as the main app. Do not re-declare them here — a
+// private copy that drifts from the app's version silently disarms monitoring.
+//
+// This file only performs side effects. What a threshold *means* (parsing, matching,
+// once-per-day dedup, progress) is decided by `ThresholdRouter`, which is unit-tested.
 
 import Foundation
 import DeviceActivity
@@ -34,15 +37,33 @@ class NudgeMonitor: DeviceActivityMonitor {
         let eventName = event.rawValue
         logger.log("eventDidReachThreshold: \(eventName, privacy: .public)")
 
-        let defaults = self.defaults
-        let userName = defaults?.string(forKey: AppGroupKeys.userFirstName) ?? "Your friend"
-        let goals = MonitoringPlan.loadSummaries(from: defaults)
+        guard let defaults else {
+            logger.error("App Group defaults unavailable — cannot handle \(eventName, privacy: .public)")
+            return
+        }
 
-        guard let matchedGoal = goals.first(where: { $0.eventName == eventName }) else {
+        let catalog = MonitoringPlan.loadSummaries(from: defaults)
+        let outcome = ThresholdRouter.route(
+            eventName: eventName,
+            catalog: catalog,
+            store: GoalProgressStore(defaults: defaults),
+            day: MonitoringPlan.dayStamp(for: Date(), calendar: .current)
+        )
+
+        switch outcome {
+        case let .milestone(goal, percent):
+            handleMilestone(goal: goal, percent: percent)
+        case let .goalReached(goal):
+            handleGoalReached(goal: goal, eventName: eventName)
+        case let .sessionTimeout(session):
+            handleSessionTimeout(session: session, eventName: eventName)
+        case .duplicate:
+            logger.log("\(eventName, privacy: .public) already handled today — skipping side effects")
+        case .unmatched:
             // Surfaced as a notification, not just a log line: an unmatched event is
             // indistinguishable from "the threshold never fired" from the user's side,
             // which is exactly what made the day-2 silence so hard to diagnose.
-            logger.error("no goal matched event '\(eventName, privacy: .public)' — registered: \(goals.map(\.eventName).joined(separator: ", "), privacy: .public)")
+            logger.error("no goal matched event '\(eventName, privacy: .public)' — catalog: \(catalog.map(\.eventName).joined(separator: ", "), privacy: .public)")
             postLocalNotification(
                 eventName: eventName,
                 title: "Nudge misconfigured",
@@ -51,22 +72,53 @@ class NudgeMonitor: DeviceActivityMonitor {
             return
         }
 
-        let reportText = NudgeMessages.reportForGoal(userName: userName, goalSummary: matchedGoal)
-        logger.log("matched \(matchedGoal.targetLabel, privacy: .public) — report: \(reportText, privacy: .public)")
-
-        // 1. Local notification — no network needed, so this always lands.
-        postLocalNotification(eventName: eventName, title: "Nudge sent", body: reportText)
-
-        // 2. Strategy 2 (ADR-034): the extension's own network calls never reach
-        //    Supabase, so queue the trigger for the main app to send.
-        enqueuePendingTrigger(eventName: eventName, report: reportText)
-
-        // 3. Ask the OS to wake the main app to drain the queue.
-        scheduleMainAppProcessing()
-
-        // 4. Safety net: if this event fired on a day we have not registered for,
-        //    the registration is stale. Re-arm now (no-op on the normal path).
+        // Safety net: if this event fired on a day we have not registered for, the
+        // registration is stale. Re-arm now (no-op on the normal path).
         reregisterIfNeeded(reason: "eventDidReachThreshold")
+    }
+
+    // MARK: - Milestone side effects
+
+    /// p10–p90. Progress is already recorded by `ThresholdRouter`.
+    private func handleMilestone(goal: GoalSummary, percent: Int) {
+        logger.log("goal \(goal.goalId) reached \(percent)%")
+        // Phase 4 seam: why-reminders hook in here, switching on `percent`.
+    }
+
+    /// p100 — the goal's limit was reached (Phase 3 G5).
+    private func handleGoalReached(goal: GoalSummary, eventName: String) {
+        postLocalNotification(
+            eventName: eventName,
+            title: NudgeMessages.limitReachedTitle(label: goal.targetLabel),
+            body: NudgeMessages.limitReachedBody(label: goal.targetLabel, limitSeconds: goal.limitSeconds)
+        )
+
+        guard shouldSendGoalBreachNudge else { return }
+        let userName = defaults?.string(forKey: AppGroupKeys.userFirstName) ?? "Your friend"
+        let report = NudgeMessages.reportForGoal(userName: userName, goalSummary: goal)
+        logger.log("goal \(goal.goalId) limit reached — queueing nudge: \(report, privacy: .public)")
+        queueNudge(eventName: eventName, report: report)
+    }
+
+    /// Phase 5E seam: becomes the user's "goal-breach nudges" toggle (read from the App
+    /// Group). Until 5E lands every goal breach is nudged, matching earlier behaviour.
+    private var shouldSendGoalBreachNudge: Bool { true }
+
+    private func handleSessionTimeout(session: GoalSummary, eventName: String) {
+        let userName = defaults?.string(forKey: AppGroupKeys.userFirstName) ?? "Your friend"
+        let report = NudgeMessages.reportForGoal(userName: userName, goalSummary: session)
+        logger.log("session timeout — report: \(report, privacy: .public)")
+
+        // Local notification — no network needed, so this always lands.
+        postLocalNotification(eventName: eventName, title: "Nudge sent", body: report)
+        queueNudge(eventName: eventName, report: report)
+    }
+
+    /// Strategy 2 (ADR-034): the extension's own network calls never reach Supabase, so
+    /// queue the trigger and ask the OS to wake the main app to send it.
+    private func queueNudge(eventName: String, report: String) {
+        enqueuePendingTrigger(eventName: eventName, report: report)
+        scheduleMainAppProcessing()
     }
 
     // MARK: - Interval boundaries
@@ -77,7 +129,10 @@ class NudgeMonitor: DeviceActivityMonitor {
     /// thresholds when a `repeats: true` interval rolls over (ADR-054).
     override func intervalDidStart(for activity: DeviceActivityName) {
         logger.log("intervalDidStart — clearing day-scoped state and re-arming")
-        defaults?.removeObject(forKey: AppGroupKeys.midnightSyncNeeded)
+        if let defaults {
+            defaults.removeObject(forKey: AppGroupKeys.midnightSyncNeeded)
+            GoalProgressStore(defaults: defaults).prune(keepingDaysFrom: Date(), calendar: .current)
+        }
         reregisterIfNeeded(reason: "intervalDidStart")
     }
 
@@ -88,8 +143,8 @@ class NudgeMonitor: DeviceActivityMonitor {
 
     // MARK: - Re-registration
 
-    /// Re-registers monitoring from the App Group copy of the goal set, but only
-    /// when the day stamp or goal signature says the current registration is stale.
+    /// Re-registers monitoring from the App Group catalog, but only when the day stamp
+    /// or goal signature says the current registration is stale.
     ///
     /// The guard is what makes this loop-safe: re-registering inside
     /// `intervalDidStart` provokes another `intervalDidStart`, and that second pass

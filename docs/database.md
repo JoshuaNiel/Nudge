@@ -69,8 +69,11 @@ Extends Supabase Auth with user-specific settings.
 | settingsLocationLat | double precision | For location-based settings lock |
 | settingsLocationLon | double precision | For location-based settings lock |
 
-### `app`
+### `app` — DEPRECATED (unused since migration 006)
 Canonical app registry. Bundle ID is the primary key — no generated integer ID needed.
+Never populated (the usage pipeline it was meant for is impossible, ADR-049) and no longer
+read or written by the app: goals identify apps by `FamilyActivitySelection` tokens, not
+bundle IDs (ADR-042, Phase 3 G1). Kept in the schema, like `usage`.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -86,11 +89,13 @@ User-defined custom app groupings, separate from Apple's built-in categories.
 |---|---|---|
 | id | bigint | PK |
 | userId | uuid | FK → auth.users(id) |
-| name | varchar | |
-| color | text | |
+| name | varchar | Unique per user, non-blank |
+| color | text | `#RRGGBB` |
+| selection | text | Nullable. Base64 of a PropertyList-encoded `FamilyActivitySelection` (≥1 app or Apple-category token). Added in migration 006; ≤ 131072 chars. |
 
-### `app_category_members`
-Join table for the many-to-many relationship between categories and apps.
+### `app_category_members` — DEPRECATED (unused since migration 006)
+Join table for the many-to-many relationship between categories and apps. Replaced by
+`app_category.selection`; kept in the schema but no longer read or written.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -118,18 +123,24 @@ Time limit goals per app or category.
 | userId | uuid | FK → auth.users(id) |
 | limitSeconds | bigint | The time limit for the given frequency window |
 | frequency | enum | `daily`, `weekly`, `monthly` |
-| bundleId | varchar | Nullable FK → app(bundleId) |
-| categoryId | bigint | Nullable FK → app_category(id) |
+| bundleId | varchar | **Deprecated** (migration 006) — nullable, never written. |
+| categoryId | bigint | Nullable FK → app_category(id), `on delete cascade` |
+| selection | text | App goals only: base64 PropertyList `FamilyActivitySelection` with exactly one app token. Null for category/total. ≤ 131072 chars. |
+| label | varchar(100) | User-typed display name. Required (non-blank) for app goals; tokens have no readable name outside a SwiftUI `Label`. |
 | targetType | enum | `app`, `category`, `total` |
 | temporary | boolean | Whether this is a time-bounded goal |
 | startDate | date | Only used when temporary = true |
 | endDate | date | Only used when temporary = true |
 
-**On `bundleId` vs `categoryId`:** Both are nullable. Exactly one should be set depending on `targetType` (enforced via check constraint). This gives real referential integrity vs. a single polymorphic `targetId` integer column which cannot have a FK constraint.
+**Target check (migration 006):** `app` → `selection` set, `category_id` null; `category` → `category_id` set, `selection` null (the tokens live on the category row); `total` → both null. Display labels: app → `label`, category → `app_category.name`, total → "All Apps".
 
-**On `frequency`:** The `limitSeconds` applies to the window defined by `frequency`. Evaluation queries `usage` summed over the appropriate window — today for `daily`, the current week (respecting `weekStart` from profiles) for `weekly`, the current calendar month for `monthly`.
+**Duplicate guard (ADR-010):** partial unique indexes on non-temporary goals — `total` on (`user_id`, `frequency`); `category` on (`user_id`, `category_id`, `frequency`); `app` on (`user_id`, `md5(selection)`, `frequency`) (`goal_unique_active_app_selection`, replacing the bundle-ID index, which NULL `bundle_id`s would have bypassed). The app guard is best effort: re-picking the same app can yield byte-different token data.
 
-**On `temporary`:** When `true`, `frequency` is ignored and the goal applies only between `startDate` and `endDate`.
+**Progress is not stored here.** Usage never leaves the device (ADR-049). The monitor extension records 10%-step milestones in the App Group (`nudge.progress.<day>`), see `docs/specs/phase-3-goals.md`.
+
+**On `frequency`:** The `limitSeconds` applies to the window defined by `frequency`. Only `daily` goals are monitored today (Phase 3 G6); `weekly`/`monthly` are stored but skipped by `MonitoringPlan`.
+
+**On `temporary`:** When `true`, the goal is monitored only on local days between `startDate` and `endDate` (inclusive); the filter runs on-device in `MonitoringPlan` so the extension applies it at midnight without the app.
 
 ### `why_reminder`
 Motivational reminders sent as notifications to help users stay intentional. Not tied to specific goals — a random or round-robin active reminder is selected when sending a notification.

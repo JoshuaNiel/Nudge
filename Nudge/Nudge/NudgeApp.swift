@@ -13,7 +13,7 @@ struct NudgeApp: App {
     // Cleared once the deferred monitoring registration runs.
     @State private var pendingForegroundSync = false
 
-    private let monitoringService = MonitoringRegistrationService()
+    private let monitoringService = MonitoringRegistrationService.shared
     private let goalService = GoalService()
 
     init() {
