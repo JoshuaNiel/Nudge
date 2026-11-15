@@ -349,50 +349,58 @@ extension AddFriendSheet {
 
 // MARK: - NudgeHistoryView
 
+/// One friend's nudge history. Live while visible: `.task` runs the view model's realtime
+/// subscription (cancelled — and the channel removed — when the screen disappears).
 private struct NudgeHistoryView: View {
     let friend: Friend
 
-    @State private var nudges: [Nudge] = []
-    @State private var isLoading = false
-    @State private var errorMessage: String? = nil
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var viewModel: NudgeHistoryViewModel
+
+    init(friend: Friend) {
+        self.friend = friend
+        _viewModel = StateObject(wrappedValue: NudgeHistoryViewModel(friendId: friend.id))
+    }
 
     var body: some View {
         Group {
-            if isLoading {
+            if viewModel.isLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error = errorMessage {
-                Text(error)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .padding()
-            } else if nudges.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                        .font(.system(size: 40))
+            } else if let error = viewModel.error {
+                // Scrollable so pull-to-refresh can retry.
+                ScrollView {
+                    Text(error)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Text("No nudges sent yet.")
-                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                        .containerRelativeFrame([.horizontal, .vertical])
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if viewModel.nudges.isEmpty {
+                ScrollView {
+                    VStack(spacing: 12) {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                            .font(.system(size: 40))
+                            .foregroundStyle(.secondary)
+                        Text("No nudges sent yet.")
+                            .foregroundStyle(.secondary)
+                    }
+                    .containerRelativeFrame([.horizontal, .vertical])
+                }
             } else {
-                List(nudges) { nudge in
+                List(viewModel.nudges) { nudge in
                     NudgeHistoryRow(nudge: nudge)
                 }
             }
         }
+        .refreshable { await viewModel.refresh() }
         .navigationTitle(friend.friendName)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await loadHistory() }
-    }
-
-    private func loadHistory() async {
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            nudges = try await FriendService().fetchNudgeHistory(friendId: friend.id)
-        } catch {
-            errorMessage = error.localizedDescription
+        .task { await viewModel.start() }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await viewModel.sceneDidBecomeActive() }
         }
     }
 }
