@@ -44,10 +44,10 @@ struct NudgeApp: App {
                         SetNewPasswordView(onFinished: authRecovery.dismissSheet)
                     }
                 }
-                .alert("Link Expired", isPresented: $authRecovery.isShowingExpiredLinkAlert) {
+                .alert(AuthLinkFailure.alertTitle, isPresented: $authRecovery.isShowingLinkAlert) {
                     Button("OK", role: .cancel) {}
                 } message: {
-                    Text(AuthRecoveryCoordinator.expiredLinkMessage)
+                    Text(authRecovery.linkAlertMessage)
                 }
                 // Password-reset and email-confirmation links (nudge://…).
                 .onOpenURL { url in

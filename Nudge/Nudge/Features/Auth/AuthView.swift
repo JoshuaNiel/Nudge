@@ -6,18 +6,7 @@ struct AuthView: View {
     /// Opens the reset-password sheet, pre-filled with whatever email is typed.
     var onForgotPassword: (String) -> Void
 
-    @EnvironmentObject private var appState: AppState
-
-    @State private var mode: Mode = .signIn
-    @State private var email = ""
-    @State private var password = ""
-    @State private var confirmPassword = ""
-    @State private var isLoading = false
-    @State private var errorMessage: String? = nil
-    /// Set after sign-up when Supabase requires email confirmation before a session exists.
-    @State private var confirmationSentTo: String? = nil
-
-    private enum Mode { case signIn, signUp }
+    @StateObject private var viewModel = AuthViewModel()
 
     var body: some View {
         ScrollView {
@@ -27,7 +16,7 @@ struct AuthView: View {
                     Text("Nudge")
                         .font(.largeTitle)
                         .fontWeight(.bold)
-                    Text(mode == .signIn ? "Welcome back" : "Create your account")
+                    Text(viewModel.mode == .signIn ? "Welcome back" : "Create your account")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -35,23 +24,28 @@ struct AuthView: View {
 
                 // Email/password fields
                 VStack(spacing: 12) {
-                    TextField("Email", text: $email)
+                    TextField("Email", text: $viewModel.email)
                         .textContentType(.emailAddress)
                         .keyboardType(.emailAddress)
                         .autocapitalization(.none)
                         .textFieldStyle(.roundedBorder)
 
-                    SecureField("Password", text: $password)
-                        .textContentType(mode == .signIn ? .password : .newPassword)
+                    SecureField("Password", text: $viewModel.password)
+                        .textContentType(viewModel.mode == .signIn ? .password : .newPassword)
                         .textFieldStyle(.roundedBorder)
 
-                    if mode == .signUp {
-                        SecureField("Confirm password", text: $confirmPassword)
+                    if viewModel.mode == .signUp {
+                        Text(AuthViewModel.passwordHint)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        SecureField("Confirm password", text: $viewModel.confirmPassword)
                             .textContentType(.newPassword)
                             .textFieldStyle(.roundedBorder)
                     }
 
-                    if mode == .signIn {
+                    if viewModel.mode == .signIn {
                         Button("Forgot password?", action: forgotPassword)
                             .font(.footnote)
                             .foregroundStyle(Color.accentColor)
@@ -61,7 +55,7 @@ struct AuthView: View {
                 .padding(.horizontal, 24)
 
                 // Awaiting email confirmation
-                if let confirmationSentTo {
+                if let confirmationSentTo = viewModel.confirmationSentTo {
                     Text("Check \(confirmationSentTo) for a link to confirm your account. Open it on this iPhone to continue.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -70,7 +64,7 @@ struct AuthView: View {
                 }
 
                 // Error
-                if let errorMessage {
+                if let errorMessage = viewModel.errorMessage {
                     Text(errorMessage)
                         .font(.footnote)
                         .foregroundStyle(.red)
@@ -78,13 +72,18 @@ struct AuthView: View {
                         .padding(.horizontal, 24)
                 }
 
+                // Signed in before confirming the email
+                if viewModel.unconfirmedEmail != nil {
+                    resendConfirmationSection
+                }
+
                 // Primary action
                 Button(action: submitEmailPassword) {
                     Group {
-                        if isLoading {
+                        if viewModel.isLoading {
                             ProgressView()
                         } else {
-                            Text(mode == .signIn ? "Sign In" : "Sign Up")
+                            Text(viewModel.mode == .signIn ? "Sign In" : "Sign Up")
                                 .fontWeight(.semibold)
                         }
                     }
@@ -94,7 +93,7 @@ struct AuthView: View {
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
-                .disabled(isLoading)
+                .disabled(viewModel.isLoading)
                 .padding(.horizontal, 24)
 
                 // Divider
@@ -107,7 +106,7 @@ struct AuthView: View {
 
                 // Sign in with Apple
                 SignInWithAppleButton(
-                    mode == .signIn ? .signIn : .signUp,
+                    viewModel.mode == .signIn ? .signIn : .signUp,
                     onRequest: configureAppleRequest,
                     onCompletion: handleAppleCompletion
                 )
@@ -118,7 +117,7 @@ struct AuthView: View {
 
                 // Toggle mode
                 Button(action: toggleMode) {
-                    Text(mode == .signIn
+                    Text(viewModel.mode == .signIn
                          ? "Don't have an account? Sign up"
                          : "Already have an account? Sign in")
                         .font(.footnote)
@@ -129,58 +128,48 @@ struct AuthView: View {
         }
     }
 
+    private var resendConfirmationSection: some View {
+        VStack(spacing: 8) {
+            Button(action: resendConfirmation) {
+                if viewModel.resendStatus == .sending {
+                    ProgressView()
+                } else {
+                    Text("Resend email")
+                        .font(.footnote)
+                        .fontWeight(.semibold)
+                }
+            }
+            .foregroundStyle(Color.accentColor)
+            .disabled(!viewModel.canResendConfirmation)
+
+            if let resendMessage = viewModel.resendMessage {
+                Text(resendMessage)
+                    .font(.footnote)
+                    .foregroundStyle(viewModel.resendStatus == .sent ? Color.secondary : Color.red)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(.horizontal, 24)
+    }
+
     // MARK: - Previews
 }
 
-#Preview("Sign In") {
+#Preview {
     AuthView(onAuthenticated: {}, onForgotPassword: { _ in })
-        .environmentObject(AppState())
-}
-
-#Preview("Sign Up") {
-    AuthView(onAuthenticated: {}, onForgotPassword: { _ in })
-        .environmentObject(AppState())
 }
 
 extension AuthView {
     // MARK: - Email/Password
 
     private func submitEmailPassword() {
-        errorMessage = nil
-        confirmationSentTo = nil
-        guard validate() else { return }
-        isLoading = true
         Task {
-            defer { isLoading = false }
-            do {
-                if mode == .signIn {
-                    try await appState.authService.signIn(email: email, password: password)
-                } else {
-                    let needsConfirmation = try await appState.authService.signUp(email: email, password: password)
-                    if needsConfirmation {
-                        // No session yet. The nudge://auth-callback link signs the
-                        // user in; OnboardingCoordinator advances when it does.
-                        confirmationSentTo = email
-                        return
-                    }
-                }
-                onAuthenticated()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
+            if await viewModel.submit() { onAuthenticated() }
         }
     }
 
-    private func validate() -> Bool {
-        guard !email.isEmpty, !password.isEmpty else {
-            errorMessage = "Please fill in all fields."
-            return false
-        }
-        if mode == .signUp, password != confirmPassword {
-            errorMessage = "Passwords do not match."
-            return false
-        }
-        return true
+    private func resendConfirmation() {
+        Task { await viewModel.resendConfirmation() }
     }
 
     // MARK: - Sign in with Apple
@@ -193,38 +182,21 @@ extension AuthView {
         switch result {
         case .success(let auth):
             guard let credential = auth.credential as? ASAuthorizationAppleIDCredential else { return }
-            isLoading = true
             Task {
-                defer { isLoading = false }
-                do {
-                    try await appState.authService.signInWithApple(credential: credential)
-                    onAuthenticated()
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
+                if await viewModel.signInWithApple(credential: credential) { onAuthenticated() }
             }
         case .failure(let error):
-            // ASAuthorizationError.canceled is not a real error — user dismissed the sheet
-            let nsError = error as NSError
-            if nsError.code != ASAuthorizationError.canceled.rawValue {
-                errorMessage = error.localizedDescription
-            }
+            viewModel.appleAuthorizationFailed(error)
         }
     }
 
     // MARK: - Helpers
 
     private func forgotPassword() {
-        onForgotPassword(email.trimmingCharacters(in: .whitespacesAndNewlines))
+        onForgotPassword(viewModel.email.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private func toggleMode() {
-        withAnimation {
-            mode = mode == .signIn ? .signUp : .signIn
-            errorMessage = nil
-            confirmationSentTo = nil
-            password = ""
-            confirmPassword = ""
-        }
+        withAnimation { viewModel.toggleMode() }
     }
 }

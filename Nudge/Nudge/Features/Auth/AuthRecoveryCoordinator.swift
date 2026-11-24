@@ -27,12 +27,12 @@ final class AuthRecoveryCoordinator: ObservableObject {
         }
     }
 
-    static let expiredLinkMessage = "This link has expired. Request a new one."
-
     @Published var activeSheet: Sheet? = nil
-    @Published var isShowingExpiredLinkAlert = false
+    /// Drives the "Link Problem" alert; `linkAlertMessage` says why.
+    @Published var isShowingLinkAlert = false
+    @Published private(set) var linkAlertMessage = AuthLinkFailure.expiredMessage
 
-    /// Set when the expired-link alert has to wait for a sheet to finish dismissing
+    /// Set when the link alert has to wait for a sheet to finish dismissing
     /// (SwiftUI can't present an alert from a view that is presenting a sheet).
     private var alertPendingDismiss = false
 
@@ -63,7 +63,7 @@ final class AuthRecoveryCoordinator: ObservableObject {
     func sheetDidDismiss() {
         guard alertPendingDismiss else { return }
         alertPendingDismiss = false
-        isShowingExpiredLinkAlert = true
+        isShowingLinkAlert = true
     }
 
     // MARK: - Deep links
@@ -72,12 +72,16 @@ final class AuthRecoveryCoordinator: ObservableObject {
     func handleOpenURL(_ url: URL) async {
         guard let link = AuthDeepLink(url: url) else { return }
 
+        // A redirect that already reports an error (or has no code) never reaches Supabase.
+        if let failure = AuthLinkFailure.redirectFailure(link: link, url: url) {
+            showLinkFailure(failure, for: link)
+            return
+        }
+
         do {
             try await service.establishSession(from: url)
         } catch {
-            // The URL carries a one-time code; never log it.
-            Self.logger.error("auth link rejected (\(String(describing: link), privacy: .public)): \(error.localizedDescription, privacy: .public)")
-            showExpiredLinkAlert()
+            showLinkFailure(AuthLinkFailure.exchangeFailure(from: error), for: link)
             return
         }
 
@@ -90,12 +94,18 @@ final class AuthRecoveryCoordinator: ObservableObject {
         }
     }
 
-    private func showExpiredLinkAlert() {
+    private func showLinkFailure(_ failure: AuthLinkFailure, for link: AuthDeepLink) {
+        // Log the classification only. The URL and some SDK error messages contain
+        // the one-time code, so neither is ever logged.
+        Self.logger.error("auth link rejected (\(String(describing: link), privacy: .public)): \(failure.rawValue, privacy: .public)")
+
         switch activeSheet {
         case .none:
-            isShowingExpiredLinkAlert = true
+            linkAlertMessage = failure.message(for: link)
+            isShowingLinkAlert = true
         case .forgotPassword:
             // Close the sheet, then alert once it is gone (see sheetDidDismiss).
+            linkAlertMessage = failure.message(for: link)
             alertPendingDismiss = true
             activeSheet = nil
         case .setNewPassword:

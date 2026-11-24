@@ -47,7 +47,7 @@ final class SetNewPasswordViewModel: ObservableObject {
             newPassword = ""
             confirmPassword = ""
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = AuthErrorMapping.weakPasswordMessage(for: error) ?? error.localizedDescription
         }
     }
 }

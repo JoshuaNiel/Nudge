@@ -1,6 +1,5 @@
 import Foundation
 import Supabase
-internal import Auth  // for `Auth.AuthError` (shadowed by the app's `AuthError`)
 import AuthenticationServices
 
 // MARK: - Protocol
@@ -20,10 +19,24 @@ protocol AuthRecoveryServiceProtocol {
     func updatePassword(_ newPassword: String) async throws
 }
 
+/// The email/password and Sign in with Apple surface of `AuthService`, split out so
+/// `AuthViewModel` can be tested with a mock.
+protocol AuthEmailServiceProtocol {
+    func signIn(email: String, password: String) async throws
+
+    /// Returns `true` when Supabase requires email confirmation before a session exists.
+    func signUp(email: String, password: String) async throws -> Bool
+
+    /// Re-sends the sign-up confirmation email, redirecting to `nudge://auth-callback`.
+    func resendSignupConfirmation(email: String) async throws
+
+    func signInWithApple(credential: ASAuthorizationAppleIDCredential) async throws
+}
+
 // MARK: - Service
 
 @MainActor
-class AuthService: AuthRecoveryServiceProtocol {
+class AuthService: AuthRecoveryServiceProtocol, AuthEmailServiceProtocol {
 
     // MARK: - Email/Password
 
@@ -44,6 +57,20 @@ class AuthService: AuthRecoveryServiceProtocol {
         try await supabase.auth.signIn(email: email, password: password)
     }
 
+    /// Supabase answers success whether or not the account exists (no enumeration).
+    ///
+    /// Note: supabase-swift 2.43.1's `resend` sends no PKCE code challenge, so the
+    /// server sends this email with the implicit flow. Its link still confirms the
+    /// email in `/verify`, but the app (PKCE-only) doesn't sign in from it; see
+    /// `AuthLinkFailure.signInRequired`.
+    func resendSignupConfirmation(email: String) async throws {
+        try await supabase.auth.resend(
+            email: email,
+            type: .signup,
+            emailRedirectTo: AuthDeepLink.emailConfirmation.redirectURL
+        )
+    }
+
     func signOut() async throws {
         try await supabase.auth.signOut()
     }
@@ -56,11 +83,8 @@ class AuthService: AuthRecoveryServiceProtocol {
                 email,
                 redirectTo: AuthDeepLink.passwordRecovery.redirectURL
             )
-        } catch let error as Auth.AuthError {
-            if case let .api(_, errorCode, _, response) = error,
-               AuthRateLimit.isRateLimited(errorCode: errorCode.rawValue, httpStatus: response.statusCode) {
-                throw AuthError.rateLimited
-            }
+        } catch {
+            if AuthErrorMapping.isRateLimited(error) { throw AuthError.rateLimited }
             throw error
         }
     }
