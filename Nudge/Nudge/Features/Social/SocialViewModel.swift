@@ -47,9 +47,12 @@ enum FriendListMerge {
 
 // MARK: - SocialViewModel
 
-/// State for the Friends list: initial load, pull-to-refresh / foreground refetch, live
-/// INSERT / UPDATE events from `FriendRealtimeService` while the list is on screen, deletes,
-/// and resolving a reply push to the friend whose history should open.
+/// State for the Friends tab: initial load, pull-to-refresh / foreground refetch, live
+/// INSERT / UPDATE events from `FriendRealtimeService` while the tab is on screen, renames,
+/// deletes, and resolving a reply push to the friend whose history should open.
+///
+/// The single source of truth for friends: the friend screen (`FriendDetailViewModel`) reads
+/// its friend from `friends` rather than holding its own copy.
 @MainActor
 final class SocialViewModel: ObservableObject {
     private static let logger = Logger(subsystem: "com.joshuaqn.Nudge", category: "SocialViewModel")
@@ -58,7 +61,8 @@ final class SocialViewModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var error: String? = nil
 
-    /// True while `start(userId:)` is running, i.e. while the Friends list is on screen.
+    /// True while `start(userId:)` is running, i.e. while the Friends tab is on screen (the list
+    /// or a friend screen pushed on it).
     var isObserving: Bool { observerCount > 0 }
 
     private let friendService: FriendServiceProtocol
@@ -88,7 +92,7 @@ final class SocialViewModel: ObservableObject {
 
     /// Run from the view's `.task`: loads the list, calls `onInitialFetch` once (e.g. to open a
     /// pending push deep link against the loaded list), then applies live changes until the task
-    /// is cancelled (screen disappears) or the stream ends. Cancelling tears down the channel.
+    /// is cancelled (Friends tab disappears) or the stream ends. Cancelling tears down the channel.
     func start(userId: UUID, onInitialFetch: () async -> Void = {}) async {
         observerCount += 1
         observedUserId = userId
@@ -110,7 +114,7 @@ final class SocialViewModel: ObservableObject {
         }
     }
 
-    /// App returned to the foreground. Refetches only while the list is on screen.
+    /// App returned to the foreground. Refetches only while the Friends tab is on screen.
     func sceneDidBecomeActive() async {
         guard isObserving, let observedUserId else { return }
         await refresh(userId: observedUserId)
@@ -196,13 +200,29 @@ final class SocialViewModel: ObservableObject {
 
     // MARK: - Friends
 
+    /// Swipe-to-delete on the list. A failure is shown as the screen's error.
     func deleteFriend(_ friend: Friend) async {
         do {
-            try await friendService.deleteFriend(id: friend.id)
-            generation += 1  // a fetch already in flight may still include the deleted row
-            friends.removeAll { $0.id == friend.id }
+            try await removeFriend(id: friend.id)
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// Deletes the friend (the database cascades their nudges) and drops it from the list right
+    /// away. Throws on failure, leaving the list unchanged — the caller decides how to show it.
+    func removeFriend(id: Int) async throws {
+        try await friendService.deleteFriend(id: id)
+        generation += 1  // a fetch already in flight may still include the deleted row
+        friends.removeAll { $0.id == id }
+    }
+
+    /// Saves a new display name (already trimmed and validated by the caller) and shows it in the
+    /// list right away. The realtime UPDATE echo is then a no-op (`FriendListMerge`). Throws on
+    /// failure, leaving the list unchanged.
+    func renameFriend(id: Int, to name: String) async throws {
+        try await friendService.updateFriendName(id: id, name: name)
+        generation += 1  // a fetch already in flight may still have the old name
+        friends = friends.map { $0.id == id ? $0.renamed(to: name) : $0 }
     }
 }
