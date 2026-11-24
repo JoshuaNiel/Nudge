@@ -8,6 +8,12 @@ import os
 /// `DeviceToken`, `PushTokenManager` and `PushPayload`, which are unit-tested.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
 
+    /// How every Nudge notification — reply pushes and the monitor extension's local
+    /// notifications — is presented while the app is foregrounded. Without this iOS
+    /// drops the banner, and with past activity counted (ADR-054) a passed limit often
+    /// fires right as Nudge re-registers on foreground.
+    static let foregroundPresentationOptions: UNNotificationPresentationOptions = [.banner, .sound, .list]
+
     /// Deep-link state for push taps. Injected into the SwiftUI environment by `NudgeApp`.
     let pushRouter = PushRouter()
 
@@ -65,7 +71,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound, .list]
+        Self.foregroundPresentationOptions
     }
 
     nonisolated func userNotificationCenter(

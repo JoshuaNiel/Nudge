@@ -57,7 +57,9 @@ enum MonitoringPlan {
         return summaries
     }
 
-    /// Builds the `DeviceActivityEvent` set for the given summaries.
+    /// Builds the `DeviceActivityEvent` set for the given summaries — one event per
+    /// summary, whose threshold is exactly `limitSeconds`. The extension relies on
+    /// that 1:1 mapping to build its dedup key.
     ///
     /// App- and category-scoped goals are skipped: they need an `ApplicationToken`
     /// that only `FamilyActivityPicker` can supply (ADR-042, Phase 3).
@@ -69,7 +71,12 @@ enum MonitoringPlan {
                 applications: [],
                 categories: [],
                 webDomains: [],
-                threshold: thresholdComponents(summary.limitSeconds)
+                threshold: thresholdComponents(summary.limitSeconds),
+                // Count usage since the interval started, so a mid-day
+                // re-registration does not hand the user a fresh full limit.
+                // The flip side — a passed threshold fires again immediately —
+                // is absorbed by `FiredEventStore` in the extension (ADR-054).
+                includesPastActivity: true
             )
         }
         return events
@@ -161,16 +168,27 @@ enum MonitoringPlan {
 
     // MARK: - Registration
 
-    /// Stops and restarts monitoring for `activityName`, persists the monitored set
-    /// to the App Group for the extension, and records the day/signature stamps.
+    /// Persists the monitored set to the App Group for the extension, records the
+    /// day/signature stamps, then stops and restarts monitoring for `activityName`.
     ///
     /// `summaries` must already be composed via `composeSummaries`.
     ///
-    /// **Stamps are written before `startMonitoring` runs, deliberately.** Restarting
-    /// monitoring while its interval is active provokes another `intervalDidStart`,
-    /// and the extension re-registers from that callback — so a stamp written
-    /// afterwards would let the nested callback see the stale day and recurse. On
-    /// failure the previous stamps are restored so the next opportunity retries.
+    /// **The stamps and the goal list are written before `startMonitoring` runs,
+    /// deliberately.**
+    /// - Stamps: restarting monitoring while its interval is active provokes another
+    ///   `intervalDidStart`, and the extension re-registers from that callback — so a
+    ///   stamp written afterwards would let the nested callback see the stale day and
+    ///   recurse.
+    /// - Goal list (`AppGroupKeys.goalsActive`): every event uses
+    ///   `includesPastActivity`, so a threshold already passed today fires *during*
+    ///   `startMonitoring`. The extension matches that callback against the App Group
+    ///   goal list; written afterwards, it would compose the nudge (and the dedup key)
+    ///   from the previous limits.
+    ///
+    /// On failure all three are restored to their previous values (removed if they
+    /// were absent), so the next opportunity retries against the old state.
+    ///
+    /// On success it also prunes old `FiredEventStore` days.
     @discardableResult
     static func register(
         summaries: [GoalSummary],
@@ -182,20 +200,31 @@ enum MonitoringPlan {
         let events = events(for: summaries)
         let previousDay = defaults?.string(forKey: AppGroupKeys.lastRegisteredDay)
         let previousSignature = defaults?.string(forKey: AppGroupKeys.lastRegisteredSignature)
+        let previousGoals = defaults?.data(forKey: AppGroupKeys.goalsActive)
 
         defaults?.set(dayStamp(for: now, calendar: calendar), forKey: AppGroupKeys.lastRegisteredDay)
         defaults?.set(signature(for: summaries), forKey: AppGroupKeys.lastRegisteredSignature)
+        if let data = try? JSONEncoder().encode(summaries) {
+            defaults?.set(data, forKey: AppGroupKeys.goalsActive)
+        }
 
         do {
             try startMonitoring(schedule(), events)
         } catch {
             defaults?.setOrRemove(previousDay, forKey: AppGroupKeys.lastRegisteredDay)
             defaults?.setOrRemove(previousSignature, forKey: AppGroupKeys.lastRegisteredSignature)
+            if let previousGoals {
+                defaults?.set(previousGoals, forKey: AppGroupKeys.goalsActive)
+            } else {
+                defaults?.removeObject(forKey: AppGroupKeys.goalsActive)
+            }
             throw error
         }
 
-        if let defaults, let data = try? JSONEncoder().encode(summaries) {
-            defaults.set(data, forKey: AppGroupKeys.goalsActive)
+        if let defaults {
+            // Runs at least daily (midnight re-arm), which keeps the fired-event
+            // records bounded without a dedicated cleanup job.
+            FiredEventStore(defaults: defaults).prune(keepingDaysFrom: now, calendar: calendar)
         }
 
         logger.log("registered monitoring — \(events.count) event(s), \(summaries.count) summary(ies)")

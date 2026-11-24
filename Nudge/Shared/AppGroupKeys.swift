@@ -38,6 +38,19 @@ enum AppGroupKeys {
     /// call. A change means the user's goals or session timeout were edited.
     static let lastRegisteredSignature = "nudge.monitoring.lastSignature"
 
+    // MARK: - Fired-event dedup (written by the monitor extension via FiredEventStore)
+    /// Prefix of the per-day fired-event records. `FiredEventStore.prune` deletes
+    /// only keys under this prefix, so nothing else may use it.
+    static let firedKeyPrefix = "nudge.fired."
+
+    /// JSON-encoded sorted `[String]` of dedup keys (`"<eventName>@<thresholdSeconds>"`)
+    /// whose side effects already ran on `day` ("yyyy-MM-dd", local). Needed because
+    /// events count past activity, so an already-passed threshold fires again on
+    /// every mid-day re-registration (ADR-054 amendment).
+    static func firedKey(day: String) -> String {
+        "\(firedKeyPrefix)\(day)"
+    }
+
     // MARK: - Sync flags
     /// Set by DeviceActivityMonitor.intervalDidEnd; cleared by main app on next foreground.
     static let midnightSyncNeeded = "nudge.sync.midnightNeeded"

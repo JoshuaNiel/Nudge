@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import UserNotifications
 @testable import Nudge
 
 // MARK: - PendingTrigger Codable
@@ -209,5 +210,21 @@ struct NudgeMessagesTests {
         #expect("total" == "total")
         #expect(!"total".hasPrefix("app."))
         #expect(!"total".hasPrefix("category."))
+    }
+}
+
+// MARK: - Foreground notification presentation
+
+@Suite("AppDelegate foreground presentation")
+@MainActor
+struct AppDelegatePresentationTests {
+
+    /// Limits often fire right as Nudge comes to the foreground (re-registration
+    /// counts past activity), so the banner must show even while the app is open.
+    @Test func showsBannerSoundAndListWhileForegrounded() {
+        let options = AppDelegate.foregroundPresentationOptions
+        #expect(options.contains(.banner))
+        #expect(options.contains(.sound))
+        #expect(options.contains(.list))
     }
 }
