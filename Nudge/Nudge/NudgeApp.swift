@@ -25,6 +25,14 @@ struct NudgeApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(appState)
+                .environmentObject(appDelegate.pushRouter)
+                .task {
+                    // Route APNs tokens from the UIKit delegate to the session-aware manager.
+                    // The delegate buffers a token that arrives before this runs.
+                    appDelegate.setDeviceTokenHandler { [appState] token in
+                        Task { await appState.pushTokens.didReceiveDeviceToken(token) }
+                    }
+                }
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
@@ -52,6 +60,10 @@ struct NudgeApp: App {
             return
         }
         pendingForegroundSync = false
+
+        // Never prompts — onboarding's PermissionsView owns the permission request. Re-registering
+        // each foreground keeps the stored token fresh (APNs may rotate it).
+        await PushRegistration.registerIfAuthorized()
 
         await refreshMonitoring(userId: userId)
 

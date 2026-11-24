@@ -311,4 +311,9 @@ private final class MockFriendService: FriendServiceProtocol {
         if let error = errorToThrow { throw error }
         return []
     }
+
+    func fetchFriendId(forNudgeId nudgeId: Int) async throws -> Int? {
+        if let error = errorToThrow { throw error }
+        return nil
+    }
 }

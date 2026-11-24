@@ -144,6 +144,7 @@ private final class MockFriendService: FriendServiceProtocol {
     func deleteFriend(id: Int) async throws {}
     func updateFriendName(id: Int, name: String) async throws {}
     func fetchNudgeHistory(friendId: Int) async throws -> [Nudge] { [] }
+    func fetchFriendId(forNudgeId nudgeId: Int) async throws -> Int? { nil }
 }
 
 private func makeFriend(id: Int, status: FriendStatus = .accepted) -> Friend {
@@ -505,4 +506,5 @@ private final class FetchHookFriendService: FriendServiceProtocol {
     func deleteFriend(id: Int) async throws {}
     func updateFriendName(id: Int, name: String) async throws {}
     func fetchNudgeHistory(friendId: Int) async throws -> [Nudge] { [] }
+    func fetchFriendId(forNudgeId nudgeId: Int) async throws -> Int? { nil }
 }

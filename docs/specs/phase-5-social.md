@@ -233,39 +233,43 @@ If multiple triggers fire simultaneously (e.g. session timeout + goal breach at 
 - [ ] Store trigger settings in App Group so the monitor extension can read them
 - [ ] Wire `MonitoringRegistrationService` to include `session.timeout` event when enabled
 
-### 5F — APNs iOS Registration `[ ] Not started`
+### 5F — APNs iOS Registration + Push Deep Link `[~] Implemented — pending on-device validation`
 
 Required before push notifications work end-to-end.
 
-- [ ] Enable **Push Notifications** capability on main app target in Xcode (Signing & Capabilities → + Capability → Push Notifications)
-- [ ] In `NudgeApp.swift`, request permission and register:
-  ```swift
-  UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
-      guard granted else { return }
-      DispatchQueue.main.async {
-          UIApplication.shared.registerForRemoteNotifications()
-      }
-  }
-  ```
-- [ ] Create `DeviceTokenService` to store token in Supabase:
+- [ ] Enable **Push Notifications** capability on main app target in Xcode (Signing & Capabilities → + Capability → Push Notifications) — **user does this in Xcode** (adds `aps-environment`)
+- [x] `AppDelegate` via `@UIApplicationDelegateAdaptor` (`Core/AppDelegate.swift`): token / registration-failure callbacks (failure is logged with `os.Logger`, never crashes) and `UNUserNotificationCenterDelegate`
+  - `willPresent` → `[.banner, .sound, .list]` while foregrounded (also applies to the monitor extension's local notifications)
+  - `didReceive` (default tap action only) → parse `nudge_id` → `PushRouter`
+- [x] **Registration never prompts.** `PermissionsView` (onboarding) remains the only place that requests notification permission. `PushRegistration.registerIfAuthorized()` calls `registerForRemoteNotifications()` only when the status is `.authorized` / `.provisional` / `.ephemeral`. Called on every foreground once a user is authenticated (`NudgeApp.onForeground`) and right after `PermissionsView` obtains permission. (Supersedes the earlier `requestAuthorization` snippet in `NudgeApp`.)
+- [x] `DeviceTokenService` (`DeviceTokenServiceProtocol` + `@MainActor` class):
   ```swift
   protocol DeviceTokenServiceProtocol {
-      func registerToken(_ token: Data, userId: UUID) async throws
-  }
-
-  @MainActor
-  class DeviceTokenService: DeviceTokenServiceProtocol {
-      func registerToken(_ token: Data, userId: UUID) async throws {
-          let tokenString = token.map { String(format: "%02x", $0) }.joined()
-          try await supabase.from("device_tokens")
-              .upsert(["user_id": userId, "token": tokenString, "platform": "apns"])
-              .execute()
-      }
+      func registerToken(_ token: String, userId: UUID) async throws   // upsert, onConflict "user_id,token"
+      func deleteToken(_ token: String, userId: UUID) async throws
   }
   ```
-- [ ] Handle `application(_:didRegisterForRemoteNotificationsWithDeviceToken:)` — call `DeviceTokenService.registerToken`
-- [ ] Handle incoming push payload — deep-link to `NudgeHistoryView` for the relevant friend
-  - Payload shape: `{ nudge_id: Int }` (set by `receive-reply` in `sendApnsPush`)
+  - Takes the **hex string**, not `Data`: hex-encoding happens once at the UIKit boundary (`DeviceToken.hexString(from:)`, pure + unit-tested) and the same string is persisted and used for delete.
+  - Upserts `DeviceTokenInsert { user_id, token, platform = "apns", updated_at = now }` (Encodable + CodingKeys) with `returning: .minimal`. `updated_at` is sent explicitly so a re-upsert refreshes stale rows.
+- [x] **Token lifecycle** — `PushTokenManager` (`Core/PushTokenManager.swift`, owned by `AppState`):
+  - Latest token persisted in standard `UserDefaults` (`apnsDeviceToken`) — it is device-scoped, not user-scoped.
+  - A token that arrives before auth is ready is uploaded as soon as a user signs in (`AppState.onSignedIn`).
+  - Each (user, token) pair is uploaded at most once per process; a failed upload retries on the next token callback / sign-in.
+  - **Sign-out** goes through `AppState.signOut()`: best-effort delete of this device's row *before* `supabase.auth.signOut()` (RLS needs the JWT). The delete is time-boxed (5 s) and its failure is logged and ignored — sign-out always proceeds. The local token is kept for the next sign-in.
+- [x] **Deep link** — tapping a reply push opens that friend's `NudgeHistoryView`:
+  - Payload: `apns.ts` spreads custom data at the **top level** beside `aps`: `{ "aps": {...}, "nudge_id": 17 }`. `PushPayload.nudgeId(from:)` accepts Int / NSNumber (incl. integral float) / numeric String; rejects missing, booleans, fractional, non-positive and garbage values.
+  - `PushRouter` (`ObservableObject`, owned by `AppDelegate`, injected via `.environmentObject`) holds `pendingNudgeId`; `consumePendingNudgeId()` returns-and-clears so exactly one consumer acts on a tap.
+  - `ContentView`'s `TabView` is selection-driven (`AppTab`); while an id is pending it switches to **Friends** (`onChange(initial: true)` covers cold start).
+  - `SocialView` uses value-based navigation (`NavigationStack(path:)` + `SocialRoute.nudgeHistory(Friend)`). After its friend list loads (cold start / tab switch) or when a new id arrives (warm start), it consumes the id, resolves it via `SocialViewModel.friendForNudge(id:userId:)` → `FriendService.fetchFriendId(forNudgeId:)` (RLS restricts to the user's own nudges), refetches the friend list once if the friend isn't loaded, and sets `path = [.nudgeHistory(friend)]`.
+  - Nudge not found / not the user's / friend not accepted / network error → stays on the Friends list. **No error alert.**
+  - Pending id lives in memory only. If the user isn't signed in / hasn't finished onboarding, it waits until `ContentView` appears.
+- [x] Tests: `NudgeTests/APNsTests.swift` (hex encoding, `DeviceTokenInsert` keys, payload parsing incl. nesting, router transitions, registration status gate, `PushTokenManager` lifecycle incl. pre-auth token / dedupe / retry / sign-out delete + timeout, deep-link resolution with a mock `FriendServiceProtocol`).
+
+**APNs environment (server):** `_shared/apns.ts` already selects the host from the `APNS_SANDBOX` secret — `"true"` → `api.sandbox.push.apple.com`, anything else → `api.push.apple.com`. Xcode/development builds get **sandbox** tokens, so `APNS_SANDBOX=true` must be set while testing dev builds; TestFlight/App Store builds need it unset/`false`. The flag is global, so one project can't serve dev and production tokens at the same time (see backlog idea: store the environment per token).
+
+**Known limitations (deferred):**
+- Tapping a push for the friend whose history is already on screen doesn't refetch that history (path value unchanged). Covered by the "real-time nudge status update" item.
+- Rows for rotated/uninstalled tokens, or for a user whose session expired without signing out on a shared device, aren't removed client-side (RLS only allows deleting your own rows). Server-side pruning on APNs `410 Unregistered` / `400 BadDeviceToken` would fix this.
 
 ### 5G — User Phone Number in Settings `[ ] Not started`
 
@@ -387,8 +391,8 @@ create policy "users manage own device tokens"
 - [x] Rate limit: max 10 nudges per friend per local day
 
 ### Still Needed
-- [ ] APNs push registered on device; token stored in `device_tokens` table
-- [ ] Incoming push deep-links to NudgeHistoryView for the relevant friend
+- [~] APNs push registered on device; token stored in `device_tokens` table (code done — needs Push capability + on-device check)
+- [~] Incoming push deep-links to NudgeHistoryView for the relevant friend (code done — needs on-device check)
 - [ ] App user's phone number field in Settings
 - [ ] Nudge trigger system implemented (blocked on Phase 1 / Family Controls entitlement)
 - [ ] Nudge trigger settings UI (threshold configuration)
