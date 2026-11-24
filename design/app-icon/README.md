@@ -7,7 +7,7 @@ The other concepts are kept here for reference:
 - **Concept 1, Ring + nudge:** an indigo progress ring with a coral dot pushing its leading end.
 - **Concept 2, Two friends:** a clock speech bubble bumped by a smaller friend bubble, on coral and magenta.
 
-`contact-sheet.png` shows all three at 1024, 120, 60 and 40 px. `variants-sheet.png` shows each one in light, dark and tinted.
+`variants-sheet.png` shows each one in light, dark and tinted. It is the only rendered image kept in the repo. The per-concept PNGs and `contact-sheet.png` (all three at 1024, 120, 60 and 40 px) are not committed, because they would add about 10 MB to git history. `render.swift` regenerates them byte-for-byte (verified 2026-11-23); see below.
 
 ## Regenerate
 `render.swift` draws every concept with CoreGraphics. Each concept's colours for light, dark and tinted are set inside the script.
