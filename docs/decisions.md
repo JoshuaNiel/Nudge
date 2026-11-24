@@ -246,3 +246,89 @@ Settled decisions and their rationale. Do not re-litigate these without good rea
 ### ADR-053: Profile names required (non-blank); phone optional (opt-out)
 **Decision:** `first_name` and `last_name` are required and may not be blank; `phone_number` is optional (blank/cleared = opt out of the SMS reply fallback → stored as SQL NULL). Enforced on the frontend (Settings Save disabled) and the backend via CHECK constraints (`char_length(btrim(col)) > 0`) on the user-entered required text columns — profile names (migration 004), and `friend.friend_name` / `app_category.name` / `why_reminder.message` / `device_tokens.token` (migration 005). Columns stay nullable so the signup trigger's null-name row is valid; a *set* value must be non-blank.
 **Why:** `NOT NULL` does not stop empty strings; a CHECK is needed. Names identify the user/friend and must be real; the phone is genuinely optional by design (opt-out), so clearing it to NULL is correct behavior, not a bug.
+
+---
+
+## Monitoring Reliability (2026-09-07)
+
+### ADR-054: Monitoring re-registers itself daily; the extension is the primary re-arm path
+
+**Decision:** `DeviceActivityCenter.startMonitoring` is called again whenever the stored
+registration is stale — a new local calendar day, or an edited goal set. The
+`NudgeActivityMonitor` extension performs this itself from `intervalDidStart` (and, as a
+safety net, from `eventDidReachThreshold` when it sees a stale day stamp), reading the
+monitored set from the App Group. The main app repeats the check on foreground and
+additionally recovers a registration that lapsed entirely (device restart).
+
+Staleness is decided from two App Group stamps written by `MonitoringPlan.register`:
+`nudge.monitoring.lastDay` (`yyyy-MM-dd`, local calendar) and
+`nudge.monitoring.lastSignature` (order-independent fingerprint of the monitored set).
+
+**Why:** A `DeviceActivityEvent` threshold fires at most once per `startMonitoring` call,
+and iOS does not reliably re-arm spent thresholds when a `repeats: true` daily interval
+rolls over at midnight. Before this change nothing ever called `startMonitoring` again on
+a normal day — `reregisterIfLapsed` only fired when `center.activities` was empty (never
+true for a repeating schedule) or when `session_timeout_minutes` changed. So the app went
+permanently silent after its first triggered day, and reopening it did not help. Confirmed
+on-device 2026-09-07: changing `session_timeout_minutes` forced a fresh registration and
+triggers fired again immediately.
+
+The re-arm lives in the extension because the requirement is that monitoring keeps working
+with the app never opened. The extension is the only Nudge code the OS runs on its own.
+
+**Loop safety:** re-registering while the interval is active provokes another
+`intervalDidStart`, from which the extension re-registers again. Two things bound it:
+`register` writes the day stamp *before* calling `startMonitoring`, and the extension keys
+on `isRegistrationStale` (stamps only) rather than `shouldRegister` (which also consults
+`center.activities`). An unreliable `activities` reading inside the extension would
+otherwise re-register on every callback forever. The app keeps the `activities` term
+because restart recovery is its job.
+
+**Trade-off (original):** re-registration restarts the interval, so the day's accumulated
+progress toward a threshold resets. Staleness is keyed on a stable signature (sorted,
+order-independent) rather than raw goal-array equality — Supabase returns goal rows in
+arbitrary order, and an order-sensitive check would re-register on every foreground.
+
+**Amended 2026-11-23: count past activity, dedup side effects.** The reset was not
+acceptable: editing any goal mid-day handed the user a fresh full limit. Every event is now
+built with `includesPastActivity: true`, so a mid-day re-registration counts usage since
+midnight. That makes an already-passed threshold fire again immediately on re-registration,
+so the extension records each fired `"<eventName>@<thresholdSeconds>"` in
+`nudge.fired.<yyyy-MM-dd>` (`FiredEventStore`) and skips the notification, the trigger
+enqueue and the BG task when the key is already present that day. The threshold is part of
+the key by the user's choice: a raised limit notifies again at the new limit, a limit
+lowered below today's usage notifies once immediately, an unchanged limit never repeats.
+See `docs/specs/phase-1-devactivity.md` → "Counting past activity". The signature is still
+order-independent; re-registering is now cheap but not free (a burst of duplicate
+callbacks the dedup has to absorb).
+
+### ADR-055: Never re-register monitoring from data that failed to load
+
+**Decision:** `NudgeApp.onForeground` re-registers only when both the profile fetch and the
+goal fetch succeed. `AppState.fetchAndCacheProfile` returns `Bool` for this. On failure the
+existing registration is left untouched. Queued nudge triggers are still drained.
+
+**Why:** The previous code collapsed a failed request into an empty goal list
+(`(try? await ...) ?? []`), which is indistinguishable from "this user has no goals." That
+re-registered with zero events *and* overwrote the App Group goal list with `[]` — silently
+disarming every trigger until the next successful foreground, and making the extension's
+`eventDidReachThreshold` early-return with no goal match. For an app whose whole point is
+that the user is not opening it, "until the next successful foreground" can be all day.
+Keeping a stale registration is strictly safer than replacing it with one built from data
+we do not have.
+
+### ADR-056: `Shared/` folder compiled into both the app and the monitor extension
+
+**Decision:** `Shared/` is an Xcode 16 synchronized folder listed in the
+`fileSystemSynchronizedGroups` of both the `Nudge` and `NudgeActivityMonitor` targets. It
+holds `AppGroupKeys`, `MonitoringModels` (`GoalSummary`, `PendingTrigger`, `FriendSummary`),
+`NudgeMessages`, and `MonitoringPlan`. The extension's private duplicates of all of these
+were deleted.
+
+**Why:** The extension previously re-declared these types and re-implemented the nudge
+message copy. That was tolerable while the extension only *read* App Group data, but the
+extension now builds `DeviceActivityEvent` sets too — and a drift between the app's and the
+extension's idea of what is monitored would silently disarm monitoring, which is exactly
+the failure class ADR-054 exists to prevent. Supersedes the "Extension shared types"
+backlog item. A shared framework target is still an option later; a synchronized folder
+achieves the same de-duplication with no new target or linkage.

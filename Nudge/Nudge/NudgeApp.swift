@@ -6,6 +6,7 @@ internal import Auth
 
 @main
 struct NudgeApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -52,18 +53,35 @@ struct NudgeApp: App {
         }
         pendingForegroundSync = false
 
-        // Refresh profile so sessionTimeoutMinutes reflects any server-side changes.
-        await appState.fetchAndCacheProfile(userId: userId)
+        await refreshMonitoring(userId: userId)
 
-        let goals = (try? await goalService.fetchGoalSummaries(userId: userId)) ?? []
-        await monitoringService.reregisterIfLapsed(
+        // Strategy 2: flush any queued nudge triggers now that we're in a reliable
+        // (foregrounded) network context. Runs regardless of the outcome above —
+        // triggers already on the queue are still worth sending.
+        await NudgeTriggerService().drainPendingTriggers(userId: userId)
+    }
+
+    /// Re-registers monitoring from freshly fetched goals.
+    ///
+    /// Both fetches must succeed before touching `DeviceActivityCenter`. A failed
+    /// request used to arrive here as an empty goal list, indistinguishable from
+    /// "this user has no goals" — which re-registered with zero events and silently
+    /// disarmed every trigger until the next successful foreground (ADR-054).
+    /// Leaving yesterday's registration in place is strictly safer than replacing it
+    /// with one built from data we do not have.
+    private func refreshMonitoring(userId: UUID) async {
+        guard await appState.fetchAndCacheProfile(userId: userId) else {
+            NudgeApp.logger.error("profile fetch failed — leaving existing monitoring registration untouched")
+            return
+        }
+        guard let goals = try? await goalService.fetchGoalSummaries(userId: userId) else {
+            NudgeApp.logger.error("goal fetch failed — leaving existing monitoring registration untouched")
+            return
+        }
+        monitoringService.refreshMonitoring(
             goals: goals,
             sessionTimeoutMinutes: appState.sessionTimeoutMinutes
         )
-
-        // Strategy 2: flush any queued nudge triggers now that we're in a reliable
-        // (foregrounded) network context.
-        await NudgeTriggerService().drainPendingTriggers(userId: userId)
     }
 
     // MARK: - Background Tasks

@@ -1,7 +1,7 @@
 # Nudge — Project Status
 
 > **Read this first every session.** Update it at the end of each session.
-> Last updated: 2026-09-06
+> Last updated: 2026-09-07
 
 ---
 
@@ -20,7 +20,17 @@ The nudge trigger path is validated end-to-end on device, and the Settings/profi
 - **Nudge trigger settings UI** — only `profile.session_timeout_minutes` exists (set via SQL today);
   no UI, and no storage/toggles for goal-breach or daily-report triggers yet.
 
-**Phase 1 — DeviceActivity Pipeline** `[x] Core done — validated on device (2026-09-06)`
+**Phase 1 — DeviceActivity Pipeline** `[x] Core done — validated on device (2026-09-06); daily re-arm fixed (2026-09-07)`
+
+> **Fixed 2026-09-07 — monitoring went silent after its first triggered day.**
+> `DeviceActivityEvent` thresholds fire once per `startMonitoring` call and iOS does not
+> re-arm them when a `repeats: true` daily interval rolls over. Nothing re-registered on a
+> normal day, so triggers died after day 1 and reopening the app did not help. The monitor
+> extension now re-registers itself at `intervalDidStart` (works with the app never opened);
+> the app repeats the check on foreground and recovers restarts. Also fixed: a failed
+> profile/goal fetch on foreground used to re-register with zero events and wipe the App
+> Group goal list. See ADR-054/055/056. **Needs one on-device confirmation: leave the app
+> closed overnight and check a trigger fires the next day.**
 
 Monitoring + nudge trigger validated end-to-end on device. **Strategy 1** (background `URLSession`
 from the monitor extension) proved non-functional (never reaches Supabase); replaced by
@@ -30,7 +40,7 @@ deployed with `--no-verify-jwt` (ES256 gateway bug; auth enforced in-function �
 The remaining Phase-1-adjacent work is the **Phase 2 Dashboard** (on-device `DeviceActivityReport`
 display), not started.
 
-**Testing** `[x]` — **119 passing unit tests** (Swift Testing). Run:
+**Testing** `[x]` — **149 passing unit tests** (Swift Testing). Run:
 ```
 xcodebuild test -project Nudge.xcodeproj -scheme Nudge \
   -destination 'platform=iOS Simulator,arch=arm64,id=19C7BD9B-6973-4F63-8492-C8D13401B835'
@@ -133,9 +143,14 @@ Service layer and extension code complete (2026-04-14). Awaiting Xcode target se
 **Strategy 1 validated NON-functional (2026-09-06):** background `URLSession` from the monitor extension never reaches Supabase (no edge-log entry). Replaced by **Strategy 2** per ADR-034: extension enqueues a `PendingTrigger` to the App Group; main app sends via `NudgeTriggerService.drainPendingTriggers` on BG task + foreground. Awaiting on-device re-test (see PR #11).
 
 **Remaining Phase 1 work:**
-- [ ] On-device re-test of Strategy 2 (threshold → PendingTrigger enqueued → main app drains → SMS delivered on foreground / BG task)
+- [x] On-device re-test of Strategy 2 — validated 2026-09-06
+- [x] Daily re-arm of DeviceActivity thresholds (ADR-054) — implemented 2026-09-07
+- [ ] **On-device confirmation of the daily re-arm** — leave the app unopened overnight,
+      then exceed a limit the next day and confirm the local notification fires
 - [ ] Remove `UsageSyncService` and related dead code (note: already absent on this branch)
 - [ ] Remove hidden `DeviceActivityReport` view from `NudgeApp.swift`
+- [ ] `MonitoringRegistrationService.goalDidChange` still has no caller — wire it into the
+      Goals UI so an edit re-registers without waiting for the next foreground
 
 ### Known limitations / Phase 3 work
 

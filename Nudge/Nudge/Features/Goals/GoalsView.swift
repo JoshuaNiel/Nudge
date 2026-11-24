@@ -483,7 +483,7 @@ private struct LimitAndFrequencyStep: View {
                         .pickerStyle(.wheel)
                         .frame(maxWidth: .infinity)
                         Picker("Minutes", selection: $minutes) {
-                            ForEach([0, 5, 10, 15, 20, 30, 45], id: \.self) { m in Text("\(m)m").tag(m) }
+                            ForEach(0..<60) { m in Text("\(m)m").tag(m) }
                         }
                         .pickerStyle(.wheel)
                         .frame(maxWidth: .infinity)
