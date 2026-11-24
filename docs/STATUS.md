@@ -1,245 +1,107 @@
 # Nudge — Project Status
 
 > **Read this first every session.** Update it at the end of each session.
-> Last updated: 2026-09-07
+> Last updated: 2026-11-14
 
 ---
 
-## Current Phase
+## Where things stand
 
-**Phase 5 — Social (Friends + SMS Nudges)** `[~] In Progress`
+Every phase in the original plan has been implemented in code. Phase 3 (goals) is daily-only; weekly goals have a draft spec waiting for the user. **Nothing from the 2026-11-14 session is merged yet.** The work sits in a stack of 12 PRs. Each one passed its full unit-test suite in an independent run before it was opened. Most features still need checking on a physical device, because the simulator has no Screen Time data.
 
-The nudge trigger path is validated end-to-end on device, and the Settings/profile layer
-(Phase 5G) is merged. Remaining Phase 5 work:
-- **5F — APNs iOS registration** — enable the Push Notifications capability in Xcode, register,
-  store the device token in `device_tokens`, and deep-link an incoming reply push to
-  `NudgeHistoryView`. **Not started — likely next session.** (Until it lands, friend replies reach
-  the user only via the SMS fallback, which requires a phone number set in Settings.)
-- **5H — Real-time nudge status** — Supabase Realtime subscription on `nudge` so history updates
-  live when a reply comes in. Not started.
-- **Nudge trigger settings UI** — only `profile.session_timeout_minutes` exists (set via SQL today);
-  no UI, and no storage/toggles for goal-breach or daily-report triggers yet.
+| Phase | Name | Status |
+|---|---|---|
+| 0 | Auth & Onboarding | `[x] Done` (+ password reset & email-link deep links: #16) |
+| 1 | DeviceActivity + nudge trigger | `[x] Done`. Daily re-arm (#13) still needs its overnight device check. |
+| 2 | Dashboard | `[x] In PR #15`. Device check pending. |
+| 3 | Goals | `[x] Daily goals in PR #18 (core) + #22 (UI)`. Weekly: spec drafted (`docs/specs/weekly-goals.md`, in this PR), needs user confirmation. Monthly: not feasible (ADR-060). |
+| 4 | Why-reminders & notifications | `[x] In PR #23` |
+| 5 | Social | `[x] Done`. APNs (#14), realtime (#20), trigger settings (#21), daily report (#24). |
+| — | Account deletion | `[x] In PR #19` |
+| — | App icon | `[x] In PR #17` |
 
-**Phase 1 — DeviceActivity Pipeline** `[x] Core done — validated on device (2026-09-06); daily re-arm fixed (2026-09-07)`
+---
 
-> **Fixed 2026-09-07 — monitoring went silent after its first triggered day.**
-> `DeviceActivityEvent` thresholds fire once per `startMonitoring` call and iOS does not
-> re-arm them when a `repeats: true` daily interval rolls over. Nothing re-registered on a
-> normal day, so triggers died after day 1 and reopening the app did not help. The monitor
-> extension now re-registers itself at `intervalDidStart` (works with the app never opened);
-> the app repeats the check on foreground and recovers restarts. Also fixed: a failed
-> profile/goal fetch on foreground used to re-register with zero events and wipe the App
-> Group goal list. See ADR-054/055/056. **Needs one on-device confirmation: leave the app
-> closed overnight and check a trigger fires the next day.**
+## PR stack (merge in this order, top to bottom)
 
-Monitoring + nudge trigger validated end-to-end on device. **Strategy 1** (background `URLSession`
-from the monitor extension) proved non-functional (never reaches Supabase); replaced by
-**Strategy 2** — the extension enqueues a `PendingTrigger` to the App Group; the main app drains it
-(`NudgeTriggerService`) on foreground / `BGProcessingTask` and calls `send-nudge`. `send-nudge` is
-deployed with `--no-verify-jwt` (ES256 gateway bug; auth enforced in-function — see ADR-050).
-The remaining Phase-1-adjacent work is the **Phase 2 Dashboard** (on-device `DeviceActivityReport`
-display), not started.
+GitHub retargets a stacked PR to `main` automatically once the PR it's based on is merged.
 
-**Testing** `[x]` — **149 passing unit tests** (Swift Testing). Run:
+| PR | Branch | Base | Contents |
+|---|---|---|---|
+| #13 | `fix/daily-rearm` | main | Phase 1 daily re-arm (ADR-054/055/056) |
+| #17 | `feat/app-icon` | main | App icon (independent) |
+| #14 | `feat/apns-registration` | #13 | APNs token + reply-push deep link |
+| #19 | `feat/account-deletion` | #14 | delete-account function + Settings flow |
+| #20 | `feat/realtime-nudge-status` | #14 | Live nudge history |
+| #16 | `feat/auth-deep-links` | #13 | Forgot password, email-confirmation link |
+| #15 | `feat/phase-2-dashboard` | #13 | Dashboard |
+| #18 | `feat/goals-core` | #15 | Goals core: tokens, milestones, progress |
+| #22 | `feat/goals-ui` | #18 | Goals UI, Categories tab, exact usage |
+| #23 | `feat/why-reminders` | #22 | Why-reminders on milestones |
+| #21 | `feat/nudge-trigger-settings` | #18 | `nudge_settings` + Settings Nudges section |
+| #24 | `feat/daily-report` | #21 | Daily report (total-only) |
+| #25 | `docs/session-wrap-2026-11-14` | #13 | STATUS, ADR-057–069, backlog, ProgressLog, architecture, weekly-goals spec |
+
+**Expected merge conflicts.** Sibling branches touch some of the same files: `SettingsView`, `NudgeApp`, `AppState`, `ContentView` and `MonitorExtension`, mostly in different places. Merge in the order above and resolve conflicts as each PR lands; Claude can rebase any PR on request.
+
+---
+
+## Manual steps for the user (checklist)
+
+**Database (Supabase SQL editor), in this order:**
+- [ ] `006_goal_selection.sql` (#18). Run its preview query first: it deletes legacy app goals that have no selection.
+- [ ] `006b_realtime_nudge.sql` (#20). Independent of 006.
+- [ ] `007_why_reminder_goal.sql` (#23). Deletes existing `why_reminder` rows; only runs that delete on its first run.
+- [ ] `008_nudge_settings.sql` (#21). **Run it before installing a build that includes #21**; until then the settings fetch fails, so monitoring won't re-register on foreground.
+
+**Supabase config:**
+- [ ] `supabase secrets set APNS_SANDBOX=true` while testing Xcode builds (#14). Unset it for TestFlight/App Store.
+- [ ] Authentication → URL Configuration → Redirect URLs: add `nudge://**` (#16).
+- [ ] Authentication → Providers → Email → minimum password length 8 (recommended, #16).
+- [ ] `supabase functions deploy delete-account --no-verify-jwt` (#19).
+
+**Xcode:**
+- [ ] Nudge target → Signing & Capabilities → **+ Push Notifications** (#14).
+
+---
+
+## On-device verification still needed
+
+**Follow `docs/testing-walkthrough.md`.** It gives the one-time setup, which branch to build to test which PRs (nothing is merged, so test the top of each stack), and step-by-step checks with expected results for every PR. The key checks:
+
+1. **#13:** leave the app closed overnight; a limit should still fire the next day.
+2. **#15, #22:** real app names and icons (`Label(token)`); totals match Settings → Screen Time; the goal-detail exact usage covers only that goal's apps.
+3. **#18, #23:** milestones fire for app tokens; p100 gives one notification plus a nudge (when goal-breach is on); whys show at their percent and rotate; no duplicates after a mid-day edit.
+4. **#21, #24:**
+   - Session-timeout and goal-breach toggles take effect.
+   - The daily report goes out once, at or after its set time. Shortcut for testing it without waiting a day: see #24.
+5. **#14, #20:** a reply push deep-links to the history (cold and warm start), and the history updates live.
+6. **#16, #19:** the reset link flow works; account deletion works (use a throwaway account).
+
+---
+
+## Open decisions
+
+| Decision | Status |
+|---|---|
+| Weekly goals: no temporary weekly goals (W7), a "Week starts on" setting (W2), and `includesPastActivity` for daily goals too (W4) | **Waiting for the user.** See `docs/specs/weekly-goals.md` |
+| Daily report expiry (dropped once its due day ends) | Implemented. The user may want it dropped (#24, decision 4). |
+| Sign in with Apple: configure the provider or hide the button; token revocation on account deletion | Open (backlog) |
+| Re-enable email confirmation (ADR-004) | After #16 is tested |
+
+---
+
+## Testing
+
+The unit suite uses Swift Testing. The test count grows across the stack; the highest is 440 on #23 (#21 → #24: 402). Run:
 ```
 xcodebuild test -project Nudge.xcodeproj -scheme Nudge \
   -destination 'platform=iOS Simulator,arch=arm64,id=19C7BD9B-6973-4F63-8492-C8D13401B835'
 ```
-Note: SwiftUI/keyboard/layout behavior is not unit-testable — on-device verification is still
-required for UI changes (see backlog re: adding a UI-test target).
+Run at most two `xcodebuild` processes at once on this Mac; five parallel builds pushed the load average to about 400 and hung test launches.
 
 ---
 
-## Phase Summary
+## History
 
-| Phase | Name | Status |
-|---|---|---|
-| 0 | Auth & Onboarding | `[x] Done` |
-| 1 | DeviceActivity + Nudge Trigger | `[x] Core done` — Strategy 2 validated on device; Dashboard (Phase 2) remains |
-| 2 | Dashboard | `[ ] Not started` — on-device `DeviceActivityReport` display |
-| 3 | Goals | `[~] Initial UI` — CRUD built; live progress wiring remains |
-| 4 | Notifications & Interventions | `[ ]` — depends on Phase 3 |
-| 5 | Social (Friends + SMS) | `[~] In Progress` — nudge trigger + Settings/phone done; APNs (5F) + realtime (5H) remain |
-
----
-
-## Phase 0 — Auth & Onboarding `[x] Done`
-
-All core auth and onboarding work is complete.
-
-**Completed:**
-- [x] `AppState` — session listener, `isAuthenticated`, `currentUser`, `isLoading`
-- [x] `SupabaseClient` — singleton, credentials via `Config.xcconfig`
-- [x] `RootView` — gates on `isAuthenticated` + `onboardingComplete` (`@AppStorage`)
-- [x] `AuthService` — email sign-up/in, Sign in with Apple, `updateProfile`
-- [x] `AuthView` — email + Apple sign-in UI
-- [x] `OnboardingCoordinator` — drives tour → auth → profile → permissions
-- [x] `OnboardingTourView` — feature tour slides
-- [x] `ProfileSetupView` — collects first/last name, patches profile row
-- [x] `PermissionsView` — Screen Time + notification permission prompts (stubs)
-- [x] DB schema (`supabase/schema.sql`) — all tables, RLS, triggers, indexes
-- [x] Placeholder tab views (Dashboard, Apps, Goals, Social, Settings)
-- [x] Explicit CodingKeys on all Supabase models
-
-**Known gaps (not blocking):**
-- [ ] Email confirmation deep link (`nudge://` URL scheme) — see `docs/auth.md`
-
----
-
-## Phase 1 — DeviceActivity Pipeline `[~] In Progress`
-
-Service layer and extension code complete (2026-04-14). Awaiting Xcode target setup on physical device.
-
-### Completed (2026-04-14 → 2026-04-15)
-
-**Shared infrastructure:**
-- [x] `Core/AppGroupKeys.swift` — all App Group key constants + BGTask identifiers
-- [x] `Models/DeviceActivity.swift` — `PendingUsageEntry`, `PendingTrigger`, `GoalSummary`, `UsageRecord`, `FriendSummary`
-- [x] `Resources/NudgeMessages.swift` — all SMS message templates (goal breach, session timeout, daily report)
-- [x] DB migration `003_profile_session_timeout.sql` — `session_timeout_minutes` column on `profile` (run in Supabase)
-
-**Main app services:**
-- [x] `Services/GoalService.swift` — `fetchGoalSummaries(userId:)` joins `app` and `app_category` tables for display names
-- [x] `Services/MonitoringRegistrationService.swift` — `registerMonitoring`, `reregisterIfLapsed`, `goalDidChange` (10s debounce); always registers schedule even with empty events (required for DeviceActivityReport to have data)
-- [x] `Services/UsageSyncService.swift` — reads App Group, upserts `app` + `usage` tables (idempotent)
-
-**App wiring:**
-- [x] `Core/AppState.swift` — writes App Group secrets + first name + friends on sign-in/token refresh; clears on sign-out; publishes `timeZone` and `sessionTimeoutMinutes` from profile
-- [x] `NudgeApp.swift` — BGTask registration; foreground → reregisterIfLapsed + 3s delay + UsageSyncService; hosts 1×1 invisible DeviceActivityReport view with today's `DeviceActivityFilter`; `DeviceActivityReport.Context.nudgeSummary`
-- [x] `Features/Auth/PermissionsView.swift` — `AuthorizationCenter.shared.requestAuthorization(for: .individual)` wired up
-- [x] `Info.plist` — `BGTaskSchedulerPermittedIdentifiers` added
-
-**Xcode targets (set up on physical device):**
-- [x] Main app: Family Controls + App Groups (`group.com.joshuaqn.Nudge`) capabilities added
-- [x] `NudgeActivityMonitor` extension target created — Family Controls + App Groups; `MonitorExtension.swift` added; `NSExtensionPrincipalClass = $(PRODUCT_MODULE_NAME).NudgeMonitor`
-- [x] `NudgeActivityReport` extension target created — Family Controls + App Groups; `NudgeActivityReport.swift`, `TotalActivityReport.swift`, `TotalActivityView.swift` contain Nudge implementation; embedded in main app's **Extensions** directory (not PlugIns)
-- [x] Screen Time permission granted on device via `AuthorizationCenter`
-
-**Extension implementation (NudgeActivityReport target):**
-- [x] `NudgeActivityReport.swift` — `@main` entry point using `NudgeUsageReport` scene
-- [x] `TotalActivityReport.swift` — `NudgeUsageReport: DeviceActivityReportScene`; `makeConfiguration` iterates `DeviceActivityResults<DeviceActivityData>` with nested `for await` loops; reads `app.application.bundleIdentifier`; writes `[PendingUsageEntry]` JSON to App Group
-- [x] `TotalActivityView.swift` — `NudgeUsageCaptureView` (zero-size, receives entries from makeConfiguration)
-
-**Tests:**
-- [x] 24 new tests in `DeviceActivityTests.swift` — all 67 tests passing (no regressions)
-
-### Architecture change — DeviceActivityReport is display-only
-
-**Root cause confirmed (2026-04-15):**
-`DeviceActivityReport` extensions run in a hardened Apple sandbox that blocks all App Group writes and network calls. The permission denial ("You don't have permission to save the file") is OS-enforced and cannot be worked around via entitlements or provisioning. See ADR-049.
-
-**Consequence:** Per-app usage data cannot be synced to Supabase. The architecture has been updated:
-- `DeviceActivityReport` → display only (Phase 2 dashboard, local on-device)
-- `DeviceActivityMonitor` → all cloud/nudge functionality (already working)
-- `usage` table in Supabase → unused, retained in schema for future consideration
-- `UsageSyncService` → to be removed
-- Hidden `DeviceActivityReport` in `NudgeApp.swift` → to be removed (served no purpose once write is dropped)
-
-**What works:**
-- Monitoring registers on launch (`active activities: 1` confirmed in logs)
-- `makeConfiguration` confirmed called with real data (22 unique apps confirmed via Console.app)
-- Threshold fires on-device → `eventDidReachThreshold` runs + local notification path (2026-09-06)
-
-**Strategy 1 validated NON-functional (2026-09-06):** background `URLSession` from the monitor extension never reaches Supabase (no edge-log entry). Replaced by **Strategy 2** per ADR-034: extension enqueues a `PendingTrigger` to the App Group; main app sends via `NudgeTriggerService.drainPendingTriggers` on BG task + foreground. Awaiting on-device re-test (see PR #11).
-
-**Remaining Phase 1 work:**
-- [x] On-device re-test of Strategy 2 — validated 2026-09-06
-- [x] Daily re-arm of DeviceActivity thresholds (ADR-054) — implemented 2026-09-07
-- [ ] **On-device confirmation of the daily re-arm** — leave the app unopened overnight,
-      then exceed a limit the next day and confirm the local notification fires
-- [ ] Remove `UsageSyncService` and related dead code (note: already absent on this branch)
-- [ ] Remove hidden `DeviceActivityReport` view from `NudgeApp.swift`
-- [ ] `MonitoringRegistrationService.goalDidChange` still has no caller — wire it into the
-      Goals UI so an edit re-registers without waiting for the next foreground
-
-### Known limitations / Phase 3 work
-
-- App-specific and category goal monitoring deferred to Phase 3 (need `ApplicationToken` from `FamilyActivityPicker`)
-- `session.timeout` uses accumulated daily total, not true continuous-session detection
-- `GoalSummary` needs a `categoryBundleIds: [String]` field added in Phase 3 for category events
-
----
-
-## Phase 3 — Goals `[ ] Ready to start`
-
-No DeviceActivity dependency. Can be built against mock usage data for now; goal evaluation against real data hooks in when Phase 1 is complete.
-
-See `specs/phase-3-goals.md` for full spec.
-
----
-
-## Phase 5 — Social `[~] In Progress`
-
-### Completed This Session
-
-**iOS Layer:**
-- [x] `Social.swift` — all models with explicit CodingKeys: `FriendStatus`, `NudgeType`, `NudgeStatus`, `Friend`, `FriendInsert`, `Nudge` (`type: NudgeType?` — nullable)
-- [x] `FriendService.swift` — protocol + `@MainActor` class: fetch, add, delete, update name, fetch nudge history
-- [x] `NudgeService.swift` — protocol + class: `sendNudge(friendId:report:)` calls `send-nudge` Edge Function
-- [x] `SocialViewModel.swift` — two-init pattern (production + test injection)
-- [x] `SocialView.swift` — full replacement: friend list (accepted + pending sections), empty state, error state, AddFriendSheet (E.164 validation), NudgeHistoryView, NudgeHistoryRow
-- [x] `SocialTests.swift` — 43 tests covering all model coding, enum raw values, ViewModel loading/error/delete behavior
-
-**Supabase Edge Functions:**
-- [x] `supabase/functions/_shared/twilio.ts` — `sendSms` (Messaging Service SID), `validateTwilioSignature` (HMAC-SHA1, accepts explicit URL), `parseFormBody`, STOP/YES/NO keyword sets
-- [x] `supabase/functions/_shared/apns.ts` — `sendApnsPush`, `generateApnsJwt` (ES256 JWT with Web Crypto), direct HTTP/2 to APNs
-- [x] `supabase/functions/send-consent/index.ts` — DB webhook (Edge Function type) handler, consent SMS with first name lookup
-- [x] `supabase/functions/send-nudge/index.ts` — auto-trigger handler, timezone-aware rate limit, nullable type insert
-- [x] `supabase/functions/receive-reply/index.ts` — Twilio inbound webhook (`--no-verify-jwt`), URL reconstruction for signature validation, consent + nudge reply routing, APNs + SMS delivery
-- [x] `supabase/functions/deno.json` — compiler options for Deno LSP
-- [x] `.vscode/settings.json` — Deno language server for `supabase/functions/` (IDE only)
-
-**DB Migrations:**
-- [x] `supabase/migrations/001_device_tokens.sql` — `device_tokens` table with RLS
-- [x] `supabase/migrations/002_nudge_type_nullable.sql` — `nudge.type` column made nullable
-
-**Deployment:**
-- [x] All three Edge Functions deployed to Supabase
-- [x] `receive-reply` deployed with `--no-verify-jwt`
-- [x] DB migrations run in Supabase SQL editor
-- [x] DB Webhook configured (Edge Function type → `send-consent`) on `public.friend` INSERT
-- [x] Twilio + APNs secrets set as Edge Function secrets (not Vault)
-- [x] Twilio Messaging Service SID configured; `TWILIO_PHONE_NUMBER` removed
-- [x] Consent SMS flow tested end-to-end — friend receives consent request and reply is processed
-
-### Remaining
-
-- [ ] APNs iOS registration (enable Push Notifications capability, `registerForRemoteNotifications`, `DeviceTokenService`, token upsert)
-- [ ] Handle incoming push payload — deep-link to NudgeHistoryView
-- [ ] User phone number field in Settings → Profile
-- [ ] Nudge trigger system — **blocked on Phase 1**
-- [ ] Nudge trigger settings UI
-- [ ] Real-time nudge status updates (Supabase Realtime subscription on `nudge` table)
-
----
-
-## Open Decisions
-
-| Decision | Needed By | Status |
-|---|---|---|
-| Notification schedule for why reminders | Phase 4 | Open — in spec |
-| Unlock prompt feasibility | Phase 4 | `specs/phase-4-notifications.md` |
-| Account deletion flow | Pre-submission | Open |
-
-**Resolved this session (2026-04-14):**
-- ~~DeviceActivity sync trigger~~ → Option C: foreground + `intervalDidEnd` + BGProcessingTask (ADR-037)
-- ~~Can DeviceActivityReport write to App Group?~~ → Yes — `UserDefaults(suiteName:)` works from extensions (ADR-033)
-- ~~Nudge sending from monitor extension~~ → Strategy 1 (background URLSession); fallback Strategy 2 (App Group + BGProcessingTask) (ADR-034)
-- ~~Monitoring re-registration on goal changes~~ → Debounced 1.5s (ADR-035)
-- ~~DeviceActivityEvent naming~~ → `app.<bundle_id>`, `category.<id>`, `total`, `session.timeout` (ADR-036)
-- ~~App Group secrets~~ → Anon key + JWT only; never service role key (ADR-038)
-- ~~Which friends receive nudges~~ → All accepted friends, global trigger toggles (ADR-039)
-- ~~Report string format~~ → `NudgeMessages.swift` + `_shared/messages.ts`; no emojis; app names; top 3 (ADR-040, ADR-041)
-- ~~Per-friend trigger config~~ → Global toggles now; per-friend in backlog (ADR-039)
-- ~~Concurrency (multiple triggers at once)~~ → Send separately; rate limit handles excess
-
-**Previously resolved:**
-- ~~Twilio account setup~~ → Trial mode, verified numbers only
-- ~~APNs token storage~~ → Separate `device_tokens` table (deployed)
-- ~~Rate limiting~~ → 10 nudges/friend/day, user's local timezone
-- ~~NudgeType at send time~~ → NULL; set by friend's reply
-- ~~STOP confirmation SMS~~ → None; Twilio handles it
-- ~~Secrets location~~ → Edge Function secrets, not Vault. `Deno.env.get()` cannot read Vault.
-- ~~SMS sender identity~~ → Messaging Service SID, not direct phone number
-- ~~`receive-reply` 401~~ → Deploy with `--no-verify-jwt`; Twilio HMAC-SHA1 is the auth mechanism
-- ~~Twilio signature validation failing~~ → `req.url` has wrong scheme + stripped path prefix behind Supabase proxy; reconstruct URL from `x-forwarded-proto` + host from `req.url` + `/functions/v1` prefix
+Earlier phase-by-phase history (Phase 0–1 setup, Strategy 1 → 2, Twilio/APNs setup) is in `docs/ProgressLog.md` and the ADRs in `docs/decisions.md`. Read the specs' "implementation notes" sections for per-feature detail.
