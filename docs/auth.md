@@ -121,8 +121,25 @@ create policy "Users can manage their own rows"
 
 ---
 
+## Account Deletion
+
+Settings → **Delete Account** (bottom section) → confirmation alert → the app calls the
+`delete-account` Edge Function with the user's JWT (POST, no body). The function validates the
+caller with `auth.getUser(jwt)` and hard-deletes only that user via `auth.admin.deleteUser`;
+every user-owned table cascades from `auth.users` (audit in `docs/specs/account-deletion.md`).
+
+Only after a 2xx does the app clean up locally (`AccountCleanupService`): stop all
+DeviceActivity monitoring → wipe the App Group suite → reset `onboardingComplete` →
+`signOut(scope: .local)`, which emits `.signedOut` and returns the user to onboarding. On
+failure nothing local changes. Full details: `docs/specs/account-deletion.md`.
+
+Still open: revoking the Sign in with Apple token on deletion (SIWA isn't configured on the
+backend yet — tracked in the spec's backlog notes).
+
+---
+
 ## Open Questions
 
 > TODO: Answer before submission:
-> - What is the account deletion flow? (Required for App Store — must delete all user data from Supabase and revoke Apple token)
+> - Sign in with Apple token revocation on account deletion (deletion itself is implemented — see above)
 > - Privacy nutrition label — document all data collected and how it is used

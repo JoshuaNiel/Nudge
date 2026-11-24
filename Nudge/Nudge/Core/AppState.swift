@@ -20,6 +20,10 @@ class AppState: ObservableObject {
     /// Configured session timeout in minutes (nil = disabled).
     @Published var sessionTimeoutMinutes: Int? = nil
 
+    /// "Account Deleted" page + where onboarding starts after it (account-deletion spec D).
+    /// In memory only — never persisted.
+    @Published private(set) var postDeletion = PostDeletionRouting()
+
     let authService = AuthService()
     private let friendService = FriendService()
 
@@ -47,6 +51,7 @@ class AppState: ObservableObject {
             case .signedIn:
                 currentUser = session?.user
                 isAuthenticated = session != nil
+                postDeletion.signedIn()
                 let status = AuthorizationCenter.shared.authorizationStatus
                  print("[NudgeApp] Family Controls authorization status: \(status)")
                 if let session {
@@ -79,6 +84,13 @@ class AppState: ObservableObject {
             await pushTokens.unregisterDevice(userId: userId)
         }
         try await authService.signOut()
+    }
+
+    // MARK: - Account deleted (spec D)
+
+    /// "Back to Sign In": clears the Account Deleted page; onboarding resumes at `.auth`.
+    func backToSignInAfterDeletion() {
+        postDeletion.backToSignIn()
     }
 
     // MARK: - App Group sync
@@ -154,5 +166,13 @@ class AppState: ObservableObject {
         defaults?.removeObject(forKey: AppGroupKeys.userFirstName)
         defaults?.removeObject(forKey: AppGroupKeys.friendsAccepted)
         defaults?.removeObject(forKey: AppGroupKeys.goalsActive)
+    }
+}
+
+extension AppState: AccountDeletedPresenting {
+    /// Called by the deletion flow once the server confirms, *before* local cleanup ends the
+    /// session — so RootView switches to the page before `.signedOut` flips `isAuthenticated`.
+    func presentAccountDeleted() {
+        postDeletion.accountDeleted()
     }
 }
