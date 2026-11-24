@@ -7,12 +7,14 @@
 // device tokens.
 //
 // Deployed with --no-verify-jwt (the gateway rejects ES256 user tokens — ADR-050); the
-// caller is authenticated in-function via auth.getUser(jwt) instead.
+// caller is authenticated in-function via auth.getUser(jwt) instead. The validated token must
+// also record a password sign-in from the last 5 minutes (its `amr` claim); the app
+// re-authenticates with the password right before calling. Otherwise: 403 reauth_required.
 //
 // Deploy: supabase functions deploy delete-account --no-verify-jwt
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { handleDeleteAccount, jsonError } from './handler.ts';
+import { decodeJwtPayload, handleDeleteAccount, jsonError } from './handler.ts';
 
 Deno.serve(async (req) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -39,6 +41,10 @@ Deno.serve(async (req) => {
       if (error || !data.user) return null;
       return data.user.id;
     },
+    // Safe without signature verification: the handler calls this only after getUserId has
+    // validated the same token with the Auth server.
+    decodeClaims: decodeJwtPayload,
+    now: () => Date.now(),
     async deleteUser(userId) {
       // Hard delete (shouldSoftDelete = false) so FK cascades actually run.
       const { error } = await adminClient.auth.admin.deleteUser(userId, false);

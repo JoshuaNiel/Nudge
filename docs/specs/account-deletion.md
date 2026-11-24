@@ -23,6 +23,71 @@
   is called, via an injected protocol) and the ViewModel state machine (idle → deleting →
   done/error).
 
+## C. Password confirmation before deletion (approved by the user 2026-11-23)
+
+Deleting requires re-entering the account password. It is checked in **two layers**: the
+app re-authenticates, and the server independently requires a recent password sign-in.
+
+**What the user sees**
+- Settings → "Delete Account" opens a **sheet** instead of the alert. The sheet has:
+  - the existing explanation (account, friends, goals and history are permanently removed;
+    friends get no further texts);
+  - a `SecureField` "Password" (`textContentType(.password)`);
+  - a destructive **Delete Account** button, disabled while the field is empty (after
+    trimming nothing; whitespace is allowed in passwords) or while a request is in flight;
+  - **Cancel**.
+- While in flight: a spinner, the field and buttons disabled, and swipe-to-dismiss disabled
+  (`interactiveDismissDisabled`).
+- Errors are shown inline in the sheet (red text under the field), the typed password is
+  **cleared**, and the user can retry. Nothing is deleted on any error.
+
+| Situation | Message |
+|---|---|
+| Wrong password (`invalid_credentials`) | "Incorrect password." |
+| Auth rate limit (HTTP 429 / `over_request_rate_limit`) | "Too many attempts. Try again in a few minutes." |
+| Server says re-auth too old (403 `reauth_required`) | "Please enter your password again." |
+| Network / anything else | "Couldn't delete your account. Check your connection and try again." |
+
+- On success the sheet dismisses and the existing post-deletion cleanup runs unchanged
+  (stop monitoring → wipe App Group → reset onboarding → end local session).
+- A user who forgot their password can't delete until they reset it (#16 adds reset).
+
+**Layer 1: app re-authentication**
+- `AccountService.deleteAccount(password:)` first calls
+  `supabase.auth.signIn(email: <current session user's email>, password:)`. This replaces the
+  session with a fresh one whose token records a password sign-in now.
+- Only if that succeeds does it call `delete-account` with the **new** access token.
+- No current user / no email on the session → generic error, no request sent.
+
+**Layer 2: server recent-sign-in check**
+- After `getUser(jwt)` succeeds, `delete-account` decodes the (already validated) JWT payload
+  and reads its `amr` claim: an array of `{ method, timestamp }` (timestamp in Unix seconds).
+- It requires an entry with `method === "password"` whose `timestamp` is within
+  **300 seconds** of now (allow 60 s of clock skew into the future).
+- Otherwise it returns **403** `{ "error": "reauth_required" }`, logs the reason (missing
+  `amr`, no password entry, or too old), and deletes nothing.
+- The handler gets the current time and the claim reader by injection, so it stays
+  unit-testable. Still no body or query parameters are read.
+
+**Edge cases**
+- Sign in with Apple accounts have no password. SIWA isn't configured on the backend, so
+  today every account is email/password. When SIWA ships, deletion for those accounts needs
+  Apple re-authentication instead (backlog).
+- **Assumption to confirm on device:** Supabase access tokens carry `amr` with the original
+  authentication time, and keep it across refreshes. If not, layer 2 fails safe (403, nothing
+  deleted) and the device test catches it.
+
+**Done when**
+- iOS unit tests: the view model's states and messages for each row of the table; the
+  password is cleared after an error; re-auth runs before the delete call and the delete
+  call is skipped when re-auth fails; the delete call uses the token from re-auth.
+- Deno tests (`handler.test.ts`): a recent password `amr` → 204; an old one → 403
+  `reauth_required`; missing `amr` → 403; only non-password methods → 403; a future
+  timestamp within skew → OK; existing 401/405/500 cases unchanged. (They can't be run here
+  without Deno; see Checklist.)
+- On device: a wrong password gives "Incorrect password." and deletes nothing; the right
+  password deletes the account and all its rows.
+
 ## Checklist
 - [x] Cascade audit of every FK (below) — no explicit deletes needed in the function
 - [x] `supabase/functions/delete-account/` — `handler.ts` (pure, injectable), `index.ts` (wiring), `handler.test.ts` (Deno tests; not run locally — no `deno` installed)
@@ -69,5 +134,5 @@ Side effects: `profile.phone_number` (unique) is freed for reuse. A friend who l
 
 ## Known limitations / backlog candidates
 - If the server deletes the user but the response is lost (network drop), the app shows the error and keeps local state; the next token refresh fails and `AppState` signs out. A retry would return 401. Acceptable for now.
-- No re-authentication before deletion (an unlocked, signed-in device can delete the account). Consider a recent-sign-in check or password re-entry.
+- ~~No re-authentication before deletion.~~ Done in section C (password + server recent-sign-in check).
 - SIWA token revocation and friend-notification SMS remain out of scope (see above).

@@ -38,31 +38,18 @@ struct SettingsView: View {
                     .disabled(deletionViewModel.isDeleting)
             }
         }
-        // Every way out of these alerts is a button whose action updates the ViewModel, so
-        // the bindings' setters are intentionally no-ops: letting SwiftUI's dismissal write
-        // `false` could race the "Delete" action and cancel the confirmation first.
-        .alert(
-            "Delete Account?",
-            isPresented: Binding(get: { deletionViewModel.isConfirming }, set: { _ in })
+        // The ViewModel decides when the sheet is up (confirming / deleting / failed). The
+        // only dismissal SwiftUI can write is a swipe, which maps to Cancel; it is disabled
+        // while deleting, and `cancelDeletion()` ignores it in any other state.
+        .sheet(
+            isPresented: Binding(
+                get: { deletionViewModel.isSheetPresented },
+                set: { isPresented in
+                    if !isPresented { deletionViewModel.cancelDeletion() }
+                }
+            )
         ) {
-            Button("Delete", role: .destructive) {
-                deletionViewModel.confirmDeletion()
-            }
-            Button("Cancel", role: .cancel) {
-                deletionViewModel.cancelDeletion()
-            }
-        } message: {
-            Text(AccountDeletionViewModel.confirmationMessage)
-        }
-        .alert(
-            "Couldn't Delete Account",
-            isPresented: Binding(get: { deletionViewModel.errorMessage != nil }, set: { _ in })
-        ) {
-            Button("OK", role: .cancel) {
-                deletionViewModel.dismissError()
-            }
-        } message: {
-            Text(deletionViewModel.errorMessage ?? "")
+            DeleteAccountSheet(viewModel: deletionViewModel)
         }
         .task {
             if let user = appState.currentUser {
@@ -96,14 +83,9 @@ struct SettingsView: View {
                 phoneFocused = false
                 deletionViewModel.requestDeletion()
             } label: {
-                HStack(spacing: 8) {
-                    if deletionViewModel.isDeleting {
-                        ProgressView()
-                    }
-                    Text(deletionViewModel.isDeleting ? "Deleting Account…" : "Delete Account")
-                }
+                Text("Delete Account")
             }
-            .disabled(deletionViewModel.isDeleting)
+            .disabled(deletionViewModel.isSheetPresented)
         } footer: {
             Text("Permanently deletes your account and all of its data.")
         }
