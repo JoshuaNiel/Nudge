@@ -51,6 +51,7 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 ## Account deletion
 
 - **Lost response.** If the server deletes the account but the response is lost, the app shows an error and stays signed in until the next token refresh fails. Consider treating a 401 on the next call as "deleted" and running local cleanup.
+- **Tell friends when an account is deleted.** Send each accepted friend a one-time SMS, e.g. "<Name> has stopped using Nudge. You won't get any more messages from them." It has to go out *before* the auth user is deleted, because the friend rows cascade with it. That means `delete-account` reads the accepted friends with the service client, sends best-effort (a failure must not block the deletion), then deletes. Copy goes in `_shared/messages.ts`. Blocked on SMS sending working. (User request 2026-11-23.)
 
 ## Database cleanup (after all PRs merge and run)
 
