@@ -61,6 +61,8 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 
 ## Known Bugs / Tech Debt
 
+- **Replace swipe-to-delete across the app.** The user dislikes swipe-to-delete (Friends list, Goals, Categories, why-reminders and others). Replace it with explicit, discoverable delete actions, e.g. a destructive button on each item's detail screen with a confirmation, as the friend screen does (5J). Audit every `.onDelete` and `.swipeActions`. (User request 2026-11-23.)
+- **Resend the consent SMS to a pending friend,** and possibly **edit a friend's phone number** (that would need new consent). Left out of 5J.
 - **SMS sending is failing.** `send-nudge` returned `502`, then `429`, for every drain on 2026-11-23. The user is investigating it separately; SMS is out of scope for device testing until it's fixed. Since #13 the drain stops at the first failure and expires triggers at the end of their day, so the backlog no longer piles up.
 - **Device restart may need one app open.** If a reboot clears `DeviceActivityCenter.activities`, the extension gets no callbacks to re-arm from. Not yet verified on device.
 - **Extension `BGTaskScheduler.submit`.** The identifier is now permitted in the extension's Info.plist (#13). Confirm on device that the submit succeeds; if it doesn't, drop the call (the queue still drains on foreground).
