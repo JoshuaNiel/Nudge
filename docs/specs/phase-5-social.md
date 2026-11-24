@@ -315,6 +315,64 @@ The nudge history screen updates live when a nudge is sent or a friend replies �
 
 ---
 
+### 5I — Live Friends list + "friend accepted" notification `[ ] Spec approved by the user 2026-11-23 — implementing`
+
+Builds on 5H (same Realtime pattern) and 5F (same APNs + push-routing pattern).
+
+**1. Friends list row fix.** A friend row in `SocialView` stays shaded after navigating back
+from the history (a SwiftUI `List` + `NavigationLink(value:)` with a programmatic `path`).
+Replace the accepted-friend `NavigationLink` with a plain `Button` that appends
+`SocialRoute.nudgeHistory(friend)` to `path`, showing the same trailing chevron so it looks
+unchanged. Swipe-to-delete keeps working.
+
+**2. Live Friends list** (user-approved recommendations a, b, d):
+- While the Friends tab's list is on screen, subscribe to Realtime Postgres Changes on
+  `public.friend` for **INSERT and UPDATE**, filtered `user_id=eq.<current user>`. RLS
+  ("Users can read their own friend contacts") is the security boundary; the filter only
+  narrows it.
+  - INSERT → add the row. UPDATE → replace the row, so `pending → accepted` moves it from
+    *Pending* to *Friends*, and a rename shows. `status = blocked` → drop it from the list,
+    since blocked friends aren't shown today.
+- **No DELETE subscription.** Realtime can't apply RLS to delete events. Declines or deletions
+  from elsewhere appear on the next load.
+- Re-fetch after every (re)connect and on returning to the foreground, as in 5H.
+- **Pull-to-refresh** on the list, the empty state and the error state.
+- One channel per visible list; it's removed when the screen goes away. Ordering and dedupe
+  follow the existing load order.
+- **Migration `006c_realtime_friend.sql`:** add `public.friend` to the `supabase_realtime`
+  publication. Idempotent, independent of the other migrations, and no policy changes.
+- Out of scope (backlog): the latest nudge status shown on each row.
+
+**3. "Friend accepted" notification** (the user chose to build it now, not backlog it):
+- **Server (`receive-reply`, YES branch of `handleConsentReply`):** after the
+  `status = accepted` update succeeds, for **each** accepted friend row (one phone number can
+  be a pending friend of several users), send an APNs push to all of that row's `user_id`
+  device tokens:
+  - title: **"<friend_name> accepted"**
+  - body: **"<friend_name> agreed to be your Nudge friend. They'll get a text when you need a nudge."**
+  - data: `{ "type": "friend_accepted", "friend_id": <id> }`
+  - Best-effort: a push failure is logged and never affects the database update or the
+    thank-you SMS.
+  - DRY: extract the token lookup + `sendApnsPush` loop from `deliverReplyToAppUser` into a
+    shared `pushToUser(db, userId, title, body, data)` helper used by both.
+- **No notification** for a decline (NO) or STOP.
+- **App:** `PushPayload` also parses `type == "friend_accepted"` with a positive `friend_id`.
+  Tapping it switches to the **Friends tab** (no history opened; the friend is already in
+  the list). Reply pushes (`nudge_id`) behave as before. Unknown or malformed payloads open
+  the app normally with no routing. The foreground banner already works
+  (`foregroundPresentationOptions`).
+- **User action:** redeploy `receive-reply`.
+- **Limit:** the server side can't be exercised end to end until SMS works. The app side is
+  tested with `xcrun simctl push`.
+
+**Done when**
+- Unit tests: payload parsing (friend_accepted valid, missing or invalid id, unknown type,
+  reply payloads unchanged); router → Friends tab; friends-list merge rules (insert, update
+  pending→accepted, rename, blocked removed, no duplicates); refetch on reconnect.
+- On the Simulator: SQL `update friend set status='accepted'` on a pending row makes it move
+  live; a SQL insert appears live; no highlight after going back; a simulated
+  friend_accepted push shows a banner and tapping it opens the Friends tab.
+
 ## Data Contracts
 
 ### Edge Function — send-nudge invocation
