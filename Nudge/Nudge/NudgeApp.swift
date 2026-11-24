@@ -6,6 +6,7 @@ internal import Auth
 
 @main
 struct NudgeApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
     @Environment(\.scenePhase) private var scenePhase
 
