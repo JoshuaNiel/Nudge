@@ -7,7 +7,6 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 ## Next up (spec'd or close to it)
 
 - **Weekly goals.** Spec drafted in `specs/weekly-goals.md`; it waits on three user answers. Uses a second `nudge.weekly` activity with its own re-arm, period-scoped progress and dedup, and a "Week starts on" setting.
-- **`includesPastActivity: true` on DeviceActivity events.** Available on iOS 17.4+ (deployment target is 17.6). Re-registering mid-day would then keep counting from midnight instead of resetting, which removes ADR-054's trade-off; the once-per-day dedup already handles any re-fired milestones. Needs a device test. It's part of the weekly-goals spec (W4) but can ship on its own.
 
 ## Future Features
 
@@ -35,10 +34,12 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 - **Sign in with Apple isn't configured on the Supabase backend.** Either configure the provider (Service ID, Team ID, Key ID, `.p8`) or hide the button. Apple also expects SIWA tokens to be revoked on account deletion (#19 doesn't do this).
 - **Password minimum mismatch.** The set-new-password screen requires 8 characters, but sign-up validation doesn't. Align sign-up and set Supabase's minimum to 8.
 - **Re-enable email confirmation** (ADR-004) after testing #16's confirmation link.
+- **A returning user on a new device or reinstall redoes onboarding.** `onboardingComplete` is a device-local `@AppStorage` flag, so signing in to an existing account on a fresh install walks through profile setup and permissions again. (Found 2026-11-23 on the Simulator.) Fix: after sign-in, skip profile setup when the `profile` row already has a name, and show permissions only for permissions that aren't granted on this device. Set the flag once both are satisfied.
 
 ## APNs / Social
 
 - **Stale APNs tokens.** Rows for rotated tokens or uninstalled apps linger, because RLS only lets a device delete its own row while signed in. Fix server-side: `receive-reply` deletes the token row when APNs returns `410 Unregistered` or `400 BadDeviceToken`.
+- **A device token can stay attached to the previous user.** `device_tokens` is unique on `(user_id, token)`. Sign-out deletes this device's row best-effort (5 s cap). If that fails, for example offline, and a different user then signs in on the same phone, the old row survives, and the previous user's reply pushes land on the new user's phone. Fix: make `token` unique, and add a `security definer` RPC `claim_device_token(token)` that deletes other users' rows for that token before the upsert. (Deferred from #14 by the user, 2026-11-23.)
 - **Per-token APNs environment.** `APNS_SANDBOX` is one global flag, so dev and production devices can't both receive pushes at once. Store the environment with each token.
 - **Realtime teardown lingers when the socket is already dead.** Harmless (no UI effect), but the cleanup task waits on a reply that never comes.
 
@@ -53,6 +54,7 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 
 ## Known Bugs / Tech Debt
 
+- **SMS sending is failing.** `send-nudge` returned `502`, then `429`, for every drain on 2026-11-23. The user is investigating it separately; SMS is out of scope for device testing until it's fixed. Since #13 the drain stops at the first failure and expires triggers at the end of their day, so the backlog no longer piles up.
 - **Device restart may need one app open.** If a reboot clears `DeviceActivityCenter.activities`, the extension gets no callbacks to re-arm from. Not yet verified on device.
 - **Extension `BGTaskScheduler.submit`.** The identifier is now permitted in the extension's Info.plist (#13). Confirm on device that the submit succeeds; if it doesn't, drop the call (the queue still drains on foreground).
 - **Settings Save bar rides up with the keyboard.** It should stay pinned at the physical bottom like the tab bar. Options: `.toolbar(placement: .bottomBar)`, a keyboard-height observer, or a custom `safeAreaInset`. Needs iterating on a device.
