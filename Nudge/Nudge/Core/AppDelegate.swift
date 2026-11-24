@@ -86,16 +86,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        // Only a tap on the notification itself opens the app to the nudge.
-        // Parse here (nonisolated, pure) so only a Sendable Int crosses to the main actor.
-        let nudgeId: Int? = response.actionIdentifier == UNNotificationDefaultActionIdentifier
-            ? PushPayload.nudgeId(from: response.notification.request.content.userInfo)
+        // Only a tap on the notification itself routes (reply → history, accepted → Friends).
+        // Parse here (nonisolated, pure) so only a Sendable value crosses to the main actor.
+        let route: PushRoute? = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+            ? PushPayload.route(from: response.notification.request.content.userInfo)
             : nil
         let router = pushRouter   // @MainActor class, so Sendable
         let finish = UncheckedSendableBox(completionHandler)
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                if let nudgeId { router.handleNudgeTap(nudgeId: nudgeId) }
+                if let route { router.handle(route) }
             }
             finish.value()
         }

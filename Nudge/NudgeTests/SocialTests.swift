@@ -234,7 +234,7 @@ struct SocialViewModelTests {
     @Test func loadPopulatesFriends() async {
         let mock = MockFriendService()
         mock.friendsToReturn = [makeFriend(id: 1), makeFriend(id: 2)]
-        let vm = SocialViewModel(friendService: mock)
+        let vm = SocialViewModel(friendService: mock, realtimeService: MockFriendRealtimeService())
 
         await vm.load(userId: UUID())
 
@@ -246,7 +246,7 @@ struct SocialViewModelTests {
     @Test func loadSetsErrorOnFailure() async {
         let mock = MockFriendService()
         mock.errorToThrow = URLError(.notConnectedToInternet)
-        let vm = SocialViewModel(friendService: mock)
+        let vm = SocialViewModel(friendService: mock, realtimeService: MockFriendRealtimeService())
 
         await vm.load(userId: UUID())
 
@@ -259,7 +259,7 @@ struct SocialViewModelTests {
         let friend = makeFriend(id: 5)
         let mock = MockFriendService()
         mock.friendsToReturn = [friend]
-        let vm = SocialViewModel(friendService: mock)
+        let vm = SocialViewModel(friendService: mock, realtimeService: MockFriendRealtimeService())
         await vm.load(userId: UUID())
 
         await vm.deleteFriend(friend)
@@ -272,7 +272,7 @@ struct SocialViewModelTests {
         let friend = makeFriend(id: 3)
         let mock = MockFriendService()
         mock.friendsToReturn = [friend]
-        let vm = SocialViewModel(friendService: mock)
+        let vm = SocialViewModel(friendService: mock, realtimeService: MockFriendRealtimeService())
         await vm.load(userId: UUID())
         mock.errorToThrow = URLError(.notConnectedToInternet)
 
