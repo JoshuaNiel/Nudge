@@ -34,6 +34,7 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 - **Sign in with Apple isn't configured on the Supabase backend.** Either configure the provider (Service ID, Team ID, Key ID, `.p8`) or hide the button. Apple also expects SIWA tokens to be revoked on account deletion (#19 doesn't do this).
 - **Password minimum mismatch.** The set-new-password screen requires 8 characters, but sign-up validation doesn't. Align sign-up and set Supabase's minimum to 8.
 - **Re-enable email confirmation** (ADR-004) after testing #16's confirmation link.
+- **Rework when the onboarding tour shows.** Today the tour shows on every fresh start of the onboarding flow: a first launch, any sign-out, and any relaunch while signed out. Only "Back to Sign In" after an account deletion skips it (#19, account-deletion spec D). The user wants to revisit when it appears, and has other tweaks for the tour itself; get the details from the user before speccing. Related to the returning-user item below. (User request 2026-11-23.)
 - **A returning user on a new device or reinstall redoes onboarding.** `onboardingComplete` is a device-local `@AppStorage` flag, so signing in to an existing account on a fresh install walks through profile setup and permissions again. (Found 2026-11-23 on the Simulator.) Fix: after sign-in, skip profile setup when the `profile` row already has a name, and show permissions only for permissions that aren't granted on this device. Set the flag once both are satisfied.
 
 ## APNs / Social
