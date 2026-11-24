@@ -40,6 +40,11 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 
 - **Stale APNs tokens.** Rows for rotated tokens or uninstalled apps linger, because RLS only lets a device delete its own row while signed in. Fix server-side: `receive-reply` deletes the token row when APNs returns `410 Unregistered` or `400 BadDeviceToken`.
 - **A device token can stay attached to the previous user.** `device_tokens` is unique on `(user_id, token)`. Sign-out deletes this device's row best-effort (5 s cap). If that fails, for example offline, and a different user then signs in on the same phone, the old row survives, and the previous user's reply pushes land on the new user's phone. Fix: make `token` unique, and add a `security definer` RPC `claim_device_token(token)` that deletes other users' rows for that token before the upsert. (Deferred from #14 by the user, 2026-11-23.)
+- **Refine the friend-reply copy.** `receive-reply` builds the push the user sees when a friend answers a nudge. Review all of it together:
+  - **Push title:** `Message from <friend_name>`.
+  - **Canned reply 1 (encouragement)** and **reply 2 (reality check)** are hardcoded in `receive-reply/index.ts`. Reply 2 always says "4 hours a day is 25% of your waking hours", whatever the user's actual usage or limit. It could use the real figure from the nudge's report.
+  - **The SMS reply options** (`_shared/messages.ts` `REPLY_OPTIONS`) that friends see.
+  - Consider moving the canned replies into `_shared/messages.ts` next to the rest of the copy. (User request 2026-11-23.)
 - **Per-token APNs environment.** `APNS_SANDBOX` is one global flag, so dev and production devices can't both receive pushes at once. Store the environment with each token.
 - **Realtime teardown lingers when the socket is already dead.** Harmless (no UI effect), but the cleanup task waits on a reply that never comes.
 
