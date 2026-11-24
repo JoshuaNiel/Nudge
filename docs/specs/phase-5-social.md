@@ -373,6 +373,67 @@ unchanged. Swipe-to-delete keeps working.
   live; a SQL insert appears live; no highlight after going back; a simulated
   friend_accepted push shows a banner and tapping it opens the Friends tab.
 
+### 5J — Friend screen: every friend tappable, rename, remove `[ ] Spec approved by the user 2026-11-23 — implementing`
+
+Follows 5I on the same branch (#20).
+
+**1. Row styling.** Friend rows (accepted and pending) use normal text colours (primary name,
+secondary phone number), not the button tint. Use `.buttonStyle(.plain)` or an equivalent,
+plus a trailing chevron. 5I's row-highlight fix must keep working: no lingering shading
+after going back.
+
+**2. Every friend is tappable.** Accepted and pending rows both push one **friend screen**
+(rename `SocialRoute.nudgeHistory` to a friend route if that's cleaner; the history content
+is unchanged).
+- **Header:** friend name and phone number.
+- **Accepted:** the live nudge history from 5H, as today (pull-to-refresh, live updates).
+- **Pending:** no history, and no realtime nudge channel opened. Instead an "Awaiting
+  consent" state: *"<Name> hasn't replied YES yet. Nudges start once they accept."*
+- **Live status change:** the screen reads the friend from the Friends list's live state (5I)
+  rather than a stale copy. If the friend becomes accepted while it's open, it switches to
+  the history. If the friend becomes blocked or disappears (deleted elsewhere or by a refresh),
+  the screen pops back to the list.
+- Push deep links keep working (a nudge-reply tap opens the friend screen with the history).
+
+**3. Rename.**
+- An **Edit** toolbar button opens a sheet with a name `TextField` (prefilled), Cancel and
+  Save.
+- **Validation:** after trimming, not empty and ≤ 100 characters (`friend_name varchar(100)`
+  plus the non-blank check). Save is disabled when invalid; an inline hint explains why.
+- **Save:** calls `FriendService.updateFriendName(id:name:)` with the trimmed name. A spinner
+  shows and the controls are disabled while saving.
+- **On success:** the sheet closes, and the header and list show the new name right away
+  (local update; the realtime UPDATE echo is deduped by 5I's merge rules).
+- **On failure:** an inline error, the edit is kept, and the user can retry.
+- The phone number can't be edited (consent is tied to the number).
+
+**4. Remove friend.**
+- A destructive **"Remove Friend"** button at the bottom of the friend screen (pending and
+  accepted).
+- **Confirmation:** "Remove <Name>? They'll stop receiving nudges from you, and your nudge
+  history with them will be deleted." Remove / Cancel.
+- **On confirm:** `FriendService.deleteFriend(id:)` (cascades the nudges). On success it pops
+  to the list, and the friend is gone right away (local removal). On failure an error shows
+  and nothing changes.
+- Swipe-to-delete on the list stays for now (backlog: replace swipe-to-delete app-wide).
+
+**Out of scope (backlog):** resending the consent SMS to a pending friend; editing the phone
+number.
+
+**Done when**
+- Unit tests:
+  - rename validation (blank, whitespace only, 100 vs 101 characters, trimming);
+  - rename success updates the list and the screen; a failure keeps the edit and shows the error;
+  - remove success pops and removes; a failure keeps the friend;
+  - the pending screen opens no nudge channel;
+  - pending → accepted switches the content;
+  - blocked or missing → pop.
+- On the Simulator:
+  - rows aren't blue;
+  - a pending friend opens the awaiting-consent screen, and a SQL accept switches it live;
+  - rename shows everywhere;
+  - Remove Friend asks for confirmation, then removes the friend.
+
 ## Data Contracts
 
 ### Edge Function — send-nudge invocation
