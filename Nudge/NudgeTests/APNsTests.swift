@@ -129,47 +129,137 @@ struct PushPayloadTests {
     }
 }
 
+// MARK: - Push route parsing (5I)
+
+@Suite("PushPayload route parsing")
+@MainActor
+struct PushPayloadRouteTests {
+
+    private func userInfo(_ json: String) throws -> [AnyHashable: Any] {
+        let object = try JSONSerialization.jsonObject(with: Data(json.utf8))
+        return try #require(object as? [AnyHashable: Any])
+    }
+
+    // friend_accepted
+
+    @Test func parsesExactFriendAcceptedPayloadShape() throws {
+        // Mirrors `{ aps: {...}, ...data }` built by apns.ts with
+        // data = { type: "friend_accepted", friend_id } from receive-reply's YES branch.
+        let json = """
+        {"aps":{"alert":{"title":"Alice accepted","body":"Alice agreed to be your Nudge friend. They'll get a text when you need a nudge."},"sound":"default"},"type":"friend_accepted","friend_id":23}
+        """
+        #expect(PushPayload.route(from: try userInfo(json)) == .friendAccepted(friendId: 23))
+    }
+
+    @Test func friendAcceptedAcceptsNumberAndNumericStringIds() {
+        #expect(PushPayload.route(from: ["type": "friend_accepted", "friend_id": 5]) == .friendAccepted(friendId: 5))
+        #expect(PushPayload.route(from: ["type": "friend_accepted", "friend_id": NSNumber(value: 6)]) == .friendAccepted(friendId: 6))
+        #expect(PushPayload.route(from: ["type": "friend_accepted", "friend_id": "7"]) == .friendAccepted(friendId: 7))
+        #expect(PushPayload.route(from: ["type": "friend_accepted", "friend_id": 8.0]) == .friendAccepted(friendId: 8))
+    }
+
+    @Test func friendAcceptedWithMissingIdRoutesNowhere() {
+        #expect(PushPayload.route(from: ["type": "friend_accepted"]) == nil)
+    }
+
+    @Test func friendAcceptedWithInvalidIdRoutesNowhere() {
+        let invalidIds: [Any] = [0, -1, "-1", "abc", "", 1.5, true, NSNull(), ["id": 1]]
+        for bad in invalidIds {
+            #expect(PushPayload.route(from: ["type": "friend_accepted", "friend_id": bad]) == nil)
+        }
+    }
+
+    @Test func malformedFriendAcceptedDoesNotFallBackToNudgeId() {
+        #expect(PushPayload.route(from: ["type": "friend_accepted", "friend_id": "x", "nudge_id": 17]) == nil)
+    }
+
+    @Test func friendAcceptedFieldsNestedInsideApsAreIgnored() {
+        #expect(PushPayload.route(from: ["aps": ["type": "friend_accepted", "friend_id": 5] as [String: Any]]) == nil)
+    }
+
+    @Test func friendIdWithoutTypeRoutesNowhere() {
+        #expect(PushPayload.route(from: ["friend_id": 5]) == nil)
+    }
+
+    @Test func unknownTypeRoutesNowhere() {
+        #expect(PushPayload.route(from: ["type": "something_new", "friend_id": 5]) == nil)
+        #expect(PushPayload.route(from: ["type": "FRIEND_ACCEPTED", "friend_id": 5]) == nil)
+        #expect(PushPayload.route(from: ["aps": ["alert": "hi"]]) == nil)
+        #expect(PushPayload.route(from: [:]) == nil)
+    }
+
+    // Reply pushes — unchanged behavior
+
+    @Test func replyPayloadRoutesToNudgeReply() throws {
+        let json = """
+        {"aps":{"alert":{"title":"Message from Alice","body":"You got this"},"sound":"default"},"nudge_id":17}
+        """
+        #expect(PushPayload.route(from: try userInfo(json)) == .nudgeReply(nudgeId: 17))
+    }
+
+    @Test func replyRouteUsesTheSameNudgeIdParsing() {
+        let samples: [Any] = [42, NSNumber(value: 7), "99", " 99 ", 12.0, "abc", 12.5, true, 0, -3, NSNull()]
+        for raw in samples {
+            let expected = PushPayload.nudgeId(from: ["nudge_id": raw]).map { PushRoute.nudgeReply(nudgeId: $0) }
+            #expect(PushPayload.route(from: ["nudge_id": raw]) == expected)
+        }
+    }
+}
+
 // MARK: - PushRouter
 
 @Suite("PushRouter")
 @MainActor
 struct PushRouterTests {
 
-    @Test func startsWithNoPendingNudge() {
-        #expect(PushRouter().pendingNudgeId == nil)
+    @Test func startsWithNoPendingRoute() {
+        #expect(PushRouter().pendingRoute == nil)
     }
 
-    @Test func handleNudgeTapStoresPendingId() {
+    @Test func handleStoresPendingRoute() {
         let router = PushRouter()
-        router.handleNudgeTap(nudgeId: 3)
-        #expect(router.pendingNudgeId == 3)
+        router.handle(.nudgeReply(nudgeId: 3))
+        #expect(router.pendingRoute == .nudgeReply(nudgeId: 3))
     }
 
-    @Test func consumeReturnsAndClearsPendingId() {
+    @Test func consumeReturnsAndClearsPendingRoute() {
         let router = PushRouter()
-        router.handleNudgeTap(nudgeId: 3)
+        router.handle(.nudgeReply(nudgeId: 3))
 
-        #expect(router.consumePendingNudgeId() == 3)
-        #expect(router.pendingNudgeId == nil)
-        #expect(router.consumePendingNudgeId() == nil)
+        #expect(router.consumePendingRoute() == .nudgeReply(nudgeId: 3))
+        #expect(router.pendingRoute == nil)
+        #expect(router.consumePendingRoute() == nil)
     }
 
     @Test func consumeWhenEmptyReturnsNil() {
-        #expect(PushRouter().consumePendingNudgeId() == nil)
+        #expect(PushRouter().consumePendingRoute() == nil)
     }
 
-    @Test func laterTapReplacesEarlierPendingId() {
+    @Test func laterTapReplacesEarlierPendingRoute() {
         let router = PushRouter()
-        router.handleNudgeTap(nudgeId: 1)
-        router.handleNudgeTap(nudgeId: 2)
-        #expect(router.consumePendingNudgeId() == 2)
+        router.handle(.nudgeReply(nudgeId: 1))
+        router.handle(.friendAccepted(friendId: 2))
+        #expect(router.consumePendingRoute() == .friendAccepted(friendId: 2))
     }
 
-    @Test func resetClearsPendingId() {
+    @Test func friendAcceptedRouteIsConsumedLikeAnyOther() {
         let router = PushRouter()
-        router.handleNudgeTap(nudgeId: 1)
+        router.handle(.friendAccepted(friendId: 9))
+
+        #expect(router.consumePendingRoute() == .friendAccepted(friendId: 9))
+        #expect(router.pendingRoute == nil)
+    }
+
+    @Test func resetClearsPendingRoute() {
+        let router = PushRouter()
+        router.handle(.friendAccepted(friendId: 1))
         router.reset()
-        #expect(router.pendingNudgeId == nil)
+        #expect(router.pendingRoute == nil)
+    }
+
+    @Test func everyRouteLandsOnTheFriendsTab() {
+        #expect(AppTab.destination(for: .friendAccepted(friendId: 4)) == .friends)
+        #expect(AppTab.destination(for: .nudgeReply(nudgeId: 4)) == .friends)
     }
 }
 
@@ -434,7 +524,7 @@ struct SocialDeepLinkTests {
         let mock = DeepLinkMockFriendService()
         mock.friendsToReturn = [makeFriend(id: 1), makeFriend(id: 2)]
         mock.friendIdByNudgeId = [50: 2]
-        let vm = SocialViewModel(friendService: mock)
+        let vm = SocialViewModel(friendService: mock, realtimeService: MockFriendRealtimeService())
         await vm.load(userId: UUID())
 
         let friend = await vm.friendForNudge(id: 50, userId: UUID())
@@ -447,7 +537,7 @@ struct SocialDeepLinkTests {
     @Test func unknownNudgeResolvesToNilWithoutError() async {
         let mock = DeepLinkMockFriendService()
         mock.friendsToReturn = [makeFriend(id: 1)]
-        let vm = SocialViewModel(friendService: mock)
+        let vm = SocialViewModel(friendService: mock, realtimeService: MockFriendRealtimeService())
         await vm.load(userId: UUID())
 
         let friend = await vm.friendForNudge(id: 999, userId: UUID())
@@ -460,7 +550,7 @@ struct SocialDeepLinkTests {
         let mock = DeepLinkMockFriendService()
         mock.friendsToReturn = [makeFriend(id: 1)]
         mock.lookupError = URLError(.notConnectedToInternet)
-        let vm = SocialViewModel(friendService: mock)
+        let vm = SocialViewModel(friendService: mock, realtimeService: MockFriendRealtimeService())
         await vm.load(userId: UUID())
 
         let friend = await vm.friendForNudge(id: 50, userId: UUID())
@@ -472,7 +562,7 @@ struct SocialDeepLinkTests {
     @Test func refetchesFriendsOnceWhenFriendNotInLoadedList() async {
         let mock = DeepLinkMockFriendService()
         mock.friendIdByNudgeId = [50: 3]
-        let vm = SocialViewModel(friendService: mock)
+        let vm = SocialViewModel(friendService: mock, realtimeService: MockFriendRealtimeService())
         await vm.load(userId: UUID())          // empty list
         mock.friendsToReturn = [makeFriend(id: 3)]
 
@@ -487,7 +577,7 @@ struct SocialDeepLinkTests {
         let mock = DeepLinkMockFriendService()
         mock.friendsToReturn = [makeFriend(id: 1)]
         mock.friendIdByNudgeId = [50: 3]       // friend 3 deleted / blocked
-        let vm = SocialViewModel(friendService: mock)
+        let vm = SocialViewModel(friendService: mock, realtimeService: MockFriendRealtimeService())
         await vm.load(userId: UUID())
 
         let friend = await vm.friendForNudge(id: 50, userId: UUID())
@@ -500,7 +590,7 @@ struct SocialDeepLinkTests {
         let mock = DeepLinkMockFriendService()
         mock.friendsToReturn = [makeFriend(id: 4, status: .pending)]
         mock.friendIdByNudgeId = [50: 4]
-        let vm = SocialViewModel(friendService: mock)
+        let vm = SocialViewModel(friendService: mock, realtimeService: MockFriendRealtimeService())
         await vm.load(userId: UUID())
 
         #expect(await vm.friendForNudge(id: 50, userId: UUID()) == nil)

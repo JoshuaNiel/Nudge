@@ -154,6 +154,8 @@ Stores the app user's contacts. Friends do not need a Supabase account or the ap
 
 **On `status`:** `pending` while awaiting consent reply; `accepted` once friend confirms; `blocked` for Twilio STOP opt-outs only. Friends who reply no are deleted outright — no row retained.
 
+**Realtime:** `friend` is in the `supabase_realtime` publication (migration `006c_realtime_friend.sql`). The app subscribes to INSERT + UPDATE filtered by `user_id=eq.<uid>` while the Friends list is on screen. Realtime enforces the existing "Users can read their own friend contacts" RLS select policy per subscriber, so no extra policy exists or is needed. DELETE is not subscribed (Realtime can't apply RLS to delete events); declines / deletions made elsewhere show on the next fetch. Default replica identity is kept: UPDATE events carry the full new row.
+
 ### `nudge`
 Tracks each SMS nudge sent to a friend and the friend's reply.
 

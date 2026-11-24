@@ -10,6 +10,15 @@ import SwiftUI
 /// Main-app tabs. Selection is state-driven so a push deep link can switch tabs.
 enum AppTab: Hashable {
     case dashboard, apps, goals, friends, settings
+
+    /// The tab a tapped push lands on. Both current routes belong to Friends: a reply opens
+    /// the friend's history there; a friend-accepted push just shows the list.
+    static func destination(for route: PushRoute) -> AppTab {
+        switch route {
+        case .nudgeReply, .friendAccepted:
+            return .friends
+        }
+    }
 }
 
 struct ContentView: View {
@@ -49,12 +58,12 @@ struct ContentView: View {
                 }
                 .tag(AppTab.settings)
         }
-        // A reply-push tap (cold or warm start) lands on Friends; SocialView then opens
-        // the friend's history and consumes the pending id. `initial: true` covers a tap
-        // that arrived before this view existed.
-        .onChange(of: pushRouter.pendingNudgeId, initial: true) { _, nudgeId in
-            if nudgeId != nil {
-                selectedTab = .friends
+        // A push tap (cold or warm start) lands on its route's tab; the destination screen
+        // (SocialView) then acts on and consumes the pending route. `initial: true` covers a
+        // tap that arrived before this view existed.
+        .onChange(of: pushRouter.pendingRoute, initial: true) { _, route in
+            if let route {
+                selectedTab = AppTab.destination(for: route)
             }
         }
     }

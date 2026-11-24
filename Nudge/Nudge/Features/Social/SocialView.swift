@@ -13,6 +13,7 @@ private enum SocialRoute: Hashable {
 struct SocialView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var pushRouter: PushRouter
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = SocialViewModel()
 
     @State private var showAddFriend = false
@@ -54,20 +55,32 @@ struct SocialView: View {
                 AddFriendSheet {
                     showAddFriend = false
                     guard let userId = appState.currentUser?.id else { return }
-                    Task { await viewModel.load(userId: userId) }
+                    // Realtime delivers the INSERT too; the silent refetch covers a dead socket.
+                    Task { await viewModel.refresh(userId: userId) }
                 }
                 .environmentObject(appState)
             }
+            .refreshable {
+                guard let userId = appState.currentUser?.id else { return }
+                await viewModel.refresh(userId: userId)
+            }
+            // Live while the list is on screen: `.task` is cancelled — and the realtime channel
+            // removed — when the list disappears (tab switch, history pushed on top).
             .task {
                 guard let userId = appState.currentUser?.id else { return }
-                await viewModel.load(userId: userId)
-                hasLoaded = true
-                // Cold start / tab switch: a push tap may be waiting for the list to load.
-                await openPendingDeepLink()
+                await viewModel.start(userId: userId) {
+                    hasLoaded = true
+                    // Cold start / tab switch: a push tap may be waiting for the list to load.
+                    await openPendingDeepLink()
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task { await viewModel.sceneDidBecomeActive() }
             }
             // Warm start while this view already exists: act on a new tap immediately.
-            .onChange(of: pushRouter.pendingNudgeId) { _, nudgeId in
-                guard nudgeId != nil, hasLoaded else { return }
+            .onChange(of: pushRouter.pendingRoute) { _, route in
+                guard route != nil, hasLoaded else { return }
                 Task { await openPendingDeepLink() }
             }
         }
@@ -75,7 +88,15 @@ struct SocialView: View {
 
     // MARK: - Subviews
 
+    /// Scrollable so pull-to-refresh works from the empty state too.
     private var emptyState: some View {
+        ScrollView {
+            emptyStateContent
+                .containerRelativeFrame([.horizontal, .vertical])
+        }
+    }
+
+    private var emptyStateContent: some View {
         VStack(spacing: 12) {
             Image(systemName: "person.2")
                 .font(.system(size: 48))
@@ -102,7 +123,6 @@ struct SocialView: View {
             .padding(.top, 8)
         }
         .padding(.horizontal, 24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var friendList: some View {
@@ -113,7 +133,11 @@ struct SocialView: View {
             if !accepted.isEmpty {
                 Section("Friends") {
                     ForEach(accepted) { friend in
-                        NavigationLink(value: SocialRoute.nudgeHistory(friend)) {
+                        // A Button appending to `path`, not `NavigationLink(value:)`: with a
+                        // programmatic path the link's row stayed highlighted after going back.
+                        Button {
+                            path.append(.nudgeHistory(friend))
+                        } label: {
                             AcceptedFriendRow(friend: friend)
                         }
                     }
@@ -136,7 +160,15 @@ struct SocialView: View {
         }
     }
 
+    /// Scrollable so pull-to-refresh can retry.
     private func errorView(message: String) -> some View {
+        ScrollView {
+            errorContent(message: message)
+                .containerRelativeFrame([.horizontal, .vertical])
+        }
+    }
+
+    private func errorContent(message: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 48))
@@ -149,7 +181,6 @@ struct SocialView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -158,13 +189,21 @@ struct SocialView: View {
 extension SocialView {
     // MARK: - Push deep link
 
-    /// Opens the nudge history for the friend a tapped reply push belongs to. If the nudge or
-    /// friend can't be resolved, the user simply stays on the friend list — no error shown.
+    /// Acts on a tapped push. A reply opens the history of the friend the nudge belongs to; if
+    /// the nudge or friend can't be resolved, the user simply stays on the friend list — no
+    /// error shown. A friend-accepted push shows the list itself (no history opened).
     private func openPendingDeepLink() async {
         guard let userId = appState.currentUser?.id,
-              let nudgeId = pushRouter.consumePendingNudgeId() else { return }
-        guard let friend = await viewModel.friendForNudge(id: nudgeId, userId: userId) else { return }
-        path = [.nudgeHistory(friend)]
+              let route = pushRouter.consumePendingRoute() else { return }
+        switch route {
+        case .nudgeReply(let nudgeId):
+            guard let friend = await viewModel.friendForNudge(id: nudgeId, userId: userId) else { return }
+            path = [.nudgeHistory(friend)]
+        case .friendAccepted:
+            path = []
+            // Realtime normally has the row already; this covers a channel that isn't joined.
+            await viewModel.refresh(userId: userId)
+        }
     }
 
     // MARK: - Friends
@@ -187,19 +226,30 @@ extension SocialView {
 
 // MARK: - AcceptedFriendRow
 
+/// Tappable row (the label of a `Button`): styled to look like a `NavigationLink` row,
+/// including the trailing disclosure chevron.
 private struct AcceptedFriendRow: View {
     let friend: Friend
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(friend.friendName)
-                .font(.body)
-                .fontWeight(.medium)
-            Text(friend.friendPhoneNumber)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(friend.friendName)
+                    .font(.body)
+                    .fontWeight(.medium)
+                Text(friend.friendPhoneNumber)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
         }
         .padding(.vertical, 4)
+        .foregroundStyle(.primary)   // a List Button would otherwise tint the label
+        .contentShape(Rectangle())
     }
 }
 
