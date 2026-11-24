@@ -84,6 +84,60 @@ The extension deliberately does *not* consult `DeviceActivityCenter.activities`:
 unreliable reading there would make it re-register on every callback forever. Restart
 recovery is the app's job.
 
+### Counting past activity + "fired today" dedup (ADR-054 amendment, 2026-11-23)
+
+**Problem.** Without `includesPastActivity`, every mid-day re-registration (a goal edit,
+a session-timeout change, restart recovery) restarts each threshold's count from zero.
+A user 40 min into a 60 min limit who edits any goal gets another full 60 min.
+
+**Rule 1: every event counts the day's past activity.** `MonitoringPlan.events(for:)`
+builds every `DeviceActivityEvent` with `includesPastActivity: true` (iOS 17.4+; the
+deployment target is 17.6, so no availability check). Re-registering at 2pm counts usage
+since the interval started at midnight. At the midnight re-arm the new interval has no
+past activity, so behaviour there is unchanged.
+
+**Consequence.** A threshold that was already passed earlier today fires again,
+immediately, on every re-registration. Without a guard that duplicates the local
+notification **and the friend SMS**.
+
+**Rule 2: side effects run at most once per day per (event, threshold).**
+- **Store:** `Shared/FiredEventStore.swift`, App Group key `nudge.fired.<yyyy-MM-dd>`
+  (`AppGroupKeys.firedKey(day:)`, prefix `AppGroupKeys.firedKeyPrefix = "nudge.fired."`).
+  The value is a JSON `[String]` (sorted) of dedup keys. The day is
+  `MonitoringPlan.dayStamp(for: now, calendar: .current)` at callback time.
+- **Dedup key:** `"<eventName>@<thresholdSeconds>"`, e.g. `total@3600`,
+  `session.timeout@2700`. Including the threshold is deliberate (user decision 2026-11-23):
+  - raising a limit after it fired (1h → 2h) → the new key fires again at 2h;
+  - lowering it below today's usage after it fired → fires once, immediately (the user is
+    over the new limit);
+  - re-registering with an unchanged limit → suppressed.
+- **Test-and-set:** `markFired(_:onDay:) -> Bool` returns `true` only for the call that
+  recorded the key. It is serialised with a lock because several thresholds can cross in
+  the same instant after a re-registration.
+- **Extension `eventDidReachThreshold`:** after matching the goal, it calls `markFired`.
+  If that returns `false`, it logs `duplicate … suppressed` and skips the notification,
+  the enqueue and the BG task request. The stale-day re-register safety net still runs on
+  both paths.
+- **Unmatched events** ("Nudge misconfigured") are deduped the same way with the key
+  `"<eventName>@unmatched"`, so the warning cannot repeat on every re-registration.
+- **Unreadable store values** read as empty: worst case is one duplicate, never a crash.
+- **Pruning:** `prune(keepingDaysFrom:calendar:)` removes `nudge.fired.*` keys more than
+  2 days before today, plus malformed keys under that prefix. Other keys are never
+  touched. It is called from `MonitoringPlan.register`, which runs at least daily.
+
+**Phase 3 note.** `feat/goals-core` (#18) already has an equivalent `nudge.fired.<day>`
+store inside `GoalProgressStore`. When #13 is merged into #18, #18 adopts this store and
+key format rather than keeping two.
+
+**Done when:**
+- Unit tests cover: `includesPastActivity` is true on every built event; the dedup key
+  format; `markFired` test-and-set; per-day isolation; a changed threshold yields a new
+  key; unreadable values read as empty; pruning keeps today and the 2 previous days and
+  leaves unrelated keys alone.
+- On device: use 30+ min toward a 1h goal, edit any goal → the goal fires at ~1h total
+  usage, not 1h after the edit. After it fires, edit another goal → no second
+  notification or SMS. Raise the limit to 2h → it fires again at 2h.
+
 **Never re-register from data that failed to load (ADR-055).** `onForeground` re-registers
 only when both the profile and goal fetches succeed. A failed fetch collapsing into an
 empty goal list would register zero events and overwrite the App Group goal set — silently
@@ -273,6 +327,8 @@ Messages are built inside the monitor extension from `GoalSummary` data (read fr
 | `nudge.goals.active` | JSON `[GoalSummary]` | Main app (after registration) | Monitor extension |
 | `nudge.friends.accepted` | JSON `[FriendSummary]` | Main app (on login / friend changes) | Monitor extension |
 | `nudge.sync.midnightNeeded` | `Bool` | Monitor extension (`intervalDidEnd`) | Main app (on foreground) |
+| `nudge.monitoring.lastDay` / `.lastSignature` | `String` | `MonitoringPlan.register` | Extension + app (staleness) |
+| `nudge.fired.<yyyy-MM-dd>` | JSON `[String]` of `"<event>@<thresholdSeconds>"` | Monitor extension (`FiredEventStore`) | Monitor extension (dedup) |
 
 ```swift
 struct PendingTrigger: Codable {

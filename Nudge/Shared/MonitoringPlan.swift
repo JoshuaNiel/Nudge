@@ -57,7 +57,9 @@ enum MonitoringPlan {
         return summaries
     }
 
-    /// Builds the `DeviceActivityEvent` set for the given summaries.
+    /// Builds the `DeviceActivityEvent` set for the given summaries — one event per
+    /// summary, whose threshold is exactly `limitSeconds`. The extension relies on
+    /// that 1:1 mapping to build its dedup key.
     ///
     /// App- and category-scoped goals are skipped: they need an `ApplicationToken`
     /// that only `FamilyActivityPicker` can supply (ADR-042, Phase 3).
@@ -69,7 +71,12 @@ enum MonitoringPlan {
                 applications: [],
                 categories: [],
                 webDomains: [],
-                threshold: thresholdComponents(summary.limitSeconds)
+                threshold: thresholdComponents(summary.limitSeconds),
+                // Count usage since the interval started, so a mid-day
+                // re-registration does not hand the user a fresh full limit.
+                // The flip side — a passed threshold fires again immediately —
+                // is absorbed by `FiredEventStore` in the extension (ADR-054).
+                includesPastActivity: true
             )
         }
         return events
@@ -171,6 +178,8 @@ enum MonitoringPlan {
     /// and the extension re-registers from that callback — so a stamp written
     /// afterwards would let the nested callback see the stale day and recurse. On
     /// failure the previous stamps are restored so the next opportunity retries.
+    ///
+    /// On success it also prunes old `FiredEventStore` days.
     @discardableResult
     static func register(
         summaries: [GoalSummary],
@@ -194,8 +203,13 @@ enum MonitoringPlan {
             throw error
         }
 
-        if let defaults, let data = try? JSONEncoder().encode(summaries) {
-            defaults.set(data, forKey: AppGroupKeys.goalsActive)
+        if let defaults {
+            if let data = try? JSONEncoder().encode(summaries) {
+                defaults.set(data, forKey: AppGroupKeys.goalsActive)
+            }
+            // Runs at least daily (midnight re-arm), which keeps the fired-event
+            // records bounded without a dedicated cleanup job.
+            FiredEventStore(defaults: defaults).prune(keepingDaysFrom: now, calendar: calendar)
         }
 
         logger.log("registered monitoring — \(events.count) event(s), \(summaries.count) summary(ies)")
