@@ -10,7 +10,7 @@ enum AccountDeletionState: Equatable {
     case failed(String)
 }
 
-/// State machine for Settings → Delete Account (docs/specs/account-deletion.md, B + C):
+/// State machine for Settings → Delete Account (docs/specs/account-deletion.md, B–D):
 /// `idle → confirming → deleting → done | failed(message)`.
 ///
 /// `confirming`, `deleting` and `failed` are all shown in the password sheet; a failure
@@ -106,16 +106,19 @@ class AccountDeletionViewModel: ObservableObject {
 
     /// Sheet "Delete Account". Enters `.deleting` synchronously so the button is disabled
     /// before the next tap can land; any further tap is ignored until the request settles.
-    func confirmDeletion() {
+    ///
+    /// `presenter` is told once the server confirms (never on failure), so the
+    /// "Account Deleted" page replaces the app (spec D).
+    func confirmDeletion(notifying presenter: AccountDeletedPresenting) {
         guard canSubmit else { return }
         let password = self.password
         state = .deleting
-        deletionTask = Task { await performDeletion(password: password) }
+        deletionTask = Task { await performDeletion(password: password, presenter: presenter) }
     }
 
     // MARK: - Private
 
-    private func performDeletion(password: String) async {
+    private func performDeletion(password: String, presenter: AccountDeletedPresenting) async {
         do {
             try await accountService.deleteAccount(password: password)
         } catch {
@@ -125,7 +128,11 @@ class AccountDeletionViewModel: ObservableObject {
             return
         }
         self.password = ""
-        // Server confirmed — the account no longer exists, so local state must go too.
+        // Server confirmed. Show the Account Deleted page *before* cleanup: its last step ends
+        // the session (`.signedOut`), and RootView must already be on the page by then or it
+        // would flash the onboarding tour.
+        presenter.presentAccountDeleted()
+        // The account no longer exists, so local state must go too.
         await cleanup.performPostDeletionCleanup()
         state = .done
     }

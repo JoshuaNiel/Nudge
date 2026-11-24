@@ -5,6 +5,7 @@ import SwiftUI
 /// control drives it explicitly.
 struct DeleteAccountSheet: View {
     @ObservedObject var viewModel: AccountDeletionViewModel
+    @EnvironmentObject private var appState: AppState
     @FocusState private var passwordFocused: Bool
 
     var body: some View {
@@ -30,7 +31,7 @@ struct DeleteAccountSheet: View {
 
                 Section {
                     Button(role: .destructive) {
-                        viewModel.confirmDeletion()
+                        viewModel.confirmDeletion(notifying: appState)
                     } label: {
                         HStack(spacing: 8) {
                             if viewModel.isDeleting {
@@ -63,4 +64,5 @@ struct DeleteAccountSheet: View {
 
 #Preview {
     DeleteAccountSheet(viewModel: AccountDeletionViewModel())
+        .environmentObject(AppState())
 }

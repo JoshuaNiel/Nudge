@@ -50,6 +50,7 @@ struct SettingsView: View {
             )
         ) {
             DeleteAccountSheet(viewModel: deletionViewModel)
+                .environmentObject(appState)
         }
         .task {
             if let user = appState.currentUser {

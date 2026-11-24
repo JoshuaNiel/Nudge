@@ -88,6 +88,42 @@ app re-authenticates, and the server independently requires a recent password si
 - On device: a wrong password gives "Incorrect password." and deletes nothing; the right
   password deletes the account and all its rows.
 
+## D. "Account Deleted" confirmation page (approved by the user 2026-11-23)
+
+**After a successful deletion** the post-deletion cleanup runs unchanged (stop monitoring → wipe
+App Group → reset `onboardingComplete` → end local session). Instead of RootView falling
+through to the onboarding tour, a **full-screen "Account Deleted" page** is shown:
+- an SF Symbol checkmark (e.g. `checkmark.circle.fill`), large, accent-coloured;
+- title **"Your account has been deleted"**;
+- body: *"Your account, friends, goals and history have been permanently removed. Your
+  friends won't receive any more messages from you."*;
+- one primary button **"Back to Sign In"** (project button style, see `docs/conventions.md`).
+
+**"Back to Sign In"** clears the page and shows `OnboardingCoordinator` starting at the
+**`.auth` step** (the feature tour is skipped). From there the normal flow continues
+(sign up → profile setup → permissions; sign in → existing account).
+
+**No other exit:** it isn't a dismissible sheet, so there is no swipe-down or back navigation.
+
+**Not persisted:** the "just deleted" flag is **in memory only** (e.g. a published property on
+`AppState`, set by the deletion flow once the server confirms, before local cleanup — see Ordering). If the app is killed on that page, the
+next launch shows the normal start (the tour). No information about the deleted account is
+stored on the device.
+
+**Ordering:** the flag must be set so RootView shows the page instead of a flash of the tour
+when `.signedOut` flips `isAuthenticated` to false. Set it **before** the session is ended,
+or make RootView check it first.
+
+**Failure:** the page only appears after the server confirms deletion. Errors stay inline in the
+password sheet (section C), and the flag is never set.
+
+**Done when**
+- Unit tests: a successful deletion sets the flag; a failed deletion (each error kind) never
+  sets it; "Back to Sign In" clears it and the coordinator starts at `.auth`; the default
+  coordinator start (no flag) is still `.tour`.
+- On the Simulator: delete the test account → Account Deleted page (no tour flash) → Back to
+  Sign In → sign-in screen.
+
 ## Checklist
 - [x] Cascade audit of every FK (below) — no explicit deletes needed in the function
 - [x] `supabase/functions/delete-account/` — `handler.ts` (pure, injectable), `index.ts` (wiring), `handler.test.ts` (Deno tests; not run locally — no `deno` installed)
