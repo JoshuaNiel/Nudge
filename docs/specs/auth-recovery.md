@@ -26,6 +26,65 @@
 - **Tests:** URL routing (recovery vs callback vs unrelated URL), password validation rules,
   and the neutral reset message.
 
+## C. 2026-11-23 changes (user decisions on #16) `[ ] Approved by the user 2026-11-23 — implementing`
+
+### C1. 8-character minimum at sign-up (app + server)
+- **App:** sign-up uses `PasswordRules.validationError(password:confirmation:)`, the same
+  rule and messages as Set New Password ("Password must be at least 8 characters." /
+  "Passwords do not match."). Length is checked first. Passwords are never trimmed. The
+  sign-up password field shows the hint "Use at least 8 characters." Sign-in is unchanged
+  (no length check), because existing accounts may have shorter passwords.
+- **Server:** the user sets Supabase Authentication → Providers → Email → *Minimum password
+  length* = 8. If Supabase still rejects a password (`weak_password`, e.g. a stricter rule
+  later), sign-up and Set New Password show the server's reasons when present, otherwise
+  "Password must be at least 8 characters."
+
+### C2. Specific messages for a failed link
+The single "This link has expired" alert becomes one alert per reason. Title: "Link Problem".
+
+| Reason | How it's detected | Message |
+|---|---|---|
+| Expired before opening | redirect URL has `error_code=otp_expired` (Supabase's `/verify` redirects with `error`/`error_code`/`error_description` in the query or fragment) | "This link has expired. Request a new one." |
+| Opened on a different device (or after reinstalling) | the SDK has no stored PKCE code verifier on this device | **Reset link:** "This link was requested on a different device. Open it on the iPhone where you asked for it, or request a new one here." **Confirmation link:** "Your email is confirmed. Sign in with your email and password." (see note) |
+| An older email's link (a newer request replaced it) | server rejects the code exchange with `bad_code_verifier` | "This link is from an older request. Use the newest email, or request a new one." |
+| Already used | server `flow_state_not_found` | "This link has already been used. Request a new one if you still need it." |
+| Expired after opening (flow state too old) | server `flow_state_expired` | "This link has expired. Request a new one." |
+| Malformed (no `code` and no `error`) | router | "This link isn't valid. Request a new one." |
+| No connection | `URLError` | "Couldn't check the link. Check your connection and try again." |
+| Anything else | fallback | "This link has expired. Request a new one." |
+
+- The exact SDK and GoTrue error codes are verified against the resolved supabase-swift
+  version during implementation. A code that can't be confirmed maps to the fallback row.
+- **Note on confirmation links:** GoTrue marks the email confirmed in `/verify` *before*
+  redirecting with the PKCE code, so a confirmation link opened on another device has
+  still confirmed the account. Only the automatic sign-in fails. **Assumption, to confirm
+  on device.** If it's wrong, the row falls back to the reset-style "different device" text.
+- Existing rules are unchanged: a stale link while Set New Password is open is still
+  ignored; the forgot-password sheet still closes before the alert. Codes are never logged.
+
+### C3. Turn on email confirmation now (ADR-004 reversal)
+- **User:** Supabase Authentication → Providers → Email → enable **Confirm email**.
+- **App:** already handles it (sign-up shows "Check <email> for a link…"; the link signs in
+  and continues to profile setup). No code change beyond C1/C2, unless testing finds a gap.
+- **Sign-in before confirming:** Supabase returns `email_not_confirmed`. The sign-in screen
+  shows "Confirm your email first. Check your inbox for the link." with a **Resend email**
+  button (`auth.resend(type: .signup)`). Rate limiting uses the existing wait message.
+- Existing accounts are already confirmed and aren't affected.
+- **Delivery limit (backlog, before launch):** Supabase's built-in email only sends to
+  project team members, with a low hourly cap. Real users need custom SMTP.
+- ADR-004 gets an amendment: email confirmation re-enabled 2026-11-23.
+
+### Done when
+- **Unit tests:**
+  - sign-up password validation (7 rejected, 8 accepted, mismatch, order of messages, no trimming);
+  - the `weak_password` mapping;
+  - every C2 row: URL-error parsing from the query and the fragment, and the SDK/server error → reason mapping, for both link kinds;
+  - the `email_not_confirmed` mapping and the Resend action (including the rate limit).
+- **On device:**
+  - sign-up with 7 characters is blocked in the app;
+  - with email confirmation on, sign-up shows "Check your email", the link opens the app signed in at profile setup, and signing in before confirming shows the message and Resend works;
+  - a reset link opened twice gives "already used", an older link gives "older request", and `simctl openurl` with `error_code=otp_expired` gives the expired message.
+
 ## B. Implementation notes (2026-11-14)
 
 ### Where things live
