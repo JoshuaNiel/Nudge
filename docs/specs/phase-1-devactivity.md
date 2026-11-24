@@ -194,6 +194,62 @@ If Strategy 1 does not work reliably:
 | Battery/CPU pressure | Seconds | Up to 30 minutes |
 | App force-quit | Seconds (extension still runs) | Until app reopens |
 
+### Draining the trigger queue safely (2026-11-23)
+
+**Problem (seen on device 2026-11-23).** `NudgeTriggerService.drainPendingTriggers` kept
+every trigger with any failed send, forever. The queue had grown to 133 entries dating
+back 9 days. Every foreground re-sent all of them (133+ Edge Function calls), which got the
+app rate-limited (`429`). Once SMS works again, a friend would get every stale nudge at
+once. A trigger that succeeded for one friend and failed for another was re-sent to
+*both*. Two drains (BG task + foreground) could run at once and double-send.
+
+Rules, confirmed by the user 2026-11-23:
+
+1. **Expire at the end of the trigger's day.** A trigger whose `timestamp` falls on an
+   earlier local calendar day than now (`MonitoringPlan.dayStamp`, `Calendar.current`) is
+   removed without sending, and logged. A nudge about yesterday is misleading today.
+   This also clears the existing backlog on the first drain.
+2. **Stop at the first failed send.** No further sends happen in that drain; every
+   unprocessed trigger stays queued for the next drain. Nudge never keeps hammering a
+   failing server.
+3. **Per-friend progress.** `PendingTrigger` gains `sentFriendIds: [Int]` (decoded with
+   `decodeIfPresent`, default `[]`, so queue entries written by an older build still
+   decode). A send to friend X adds X immediately (persisted before the drain moves on),
+   and retries skip friends already in the list. A trigger is done, and removed, when
+   every *currently accepted* friend is in `sentFriendIds`. Ids of friends no longer
+   accepted are ignored.
+4. **Single flight.** Only one drain runs at a time in the app process. A call made while
+   one is in flight returns immediately (logged). The flag is static, because callers
+   create a new `NudgeTriggerService` each time.
+
+Unchanged: a failed friend fetch keeps the whole queue; no accepted friends clears it.
+**Concurrency with the extension:** the extension may append while a drain runs, so every
+write is read-modify-write against a fresh `load()`. Entries are matched by
+`(eventName, timestamp)`, and triggers the drain never saw are never dropped.
+
+**Done when** unit tests cover: expiry (yesterday dropped unsent, today kept, local-day
+boundary); stop at first failure (later triggers untouched, no further send attempts);
+`sentFriendIds` persisted after a partial send, retry sends only to the remaining friends;
+a removed friend doesn't block completion; old JSON without `sentFriendIds` decodes;
+single flight (a concurrent second call makes no sends); a trigger appended mid-drain
+survives.
+
+### Registration writes the goal list before `startMonitoring` (2026-11-23)
+
+**Bug.** `MonitoringPlan.register` wrote `nudge.goals.active` *after* `startMonitoring`.
+With `includesPastActivity`, an already-passed threshold fires during `startMonitoring`,
+so the extension matched it against the **previous** goal list. The notification came at
+the right time but showed the old limit (seen on device after editing a limit in the DB),
+and the dedup key used the old limit too.
+
+**Rule.** `register` writes the stamps **and** `nudge.goals.active` before calling
+`startMonitoring`. If `startMonitoring` throws, all three are restored to their previous
+values (removed if previously absent). Pruning still runs only on success.
+
+**Done when** a unit test asserts that, inside the `startMonitoring` closure, the App
+Group already holds the new summaries; and that a throwing `startMonitoring` restores the
+previous goal list (both the "had one" and "had none" cases).
+
 ---
 
 ## App Group: Why It's Needed

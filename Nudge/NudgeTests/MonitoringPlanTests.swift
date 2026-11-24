@@ -249,6 +249,69 @@ struct MonitoringPlanRegisterTests {
                 "stamp must already be visible to a re-entrant intervalDidStart")
     }
 
+    /// With `includesPastActivity`, an already-passed threshold fires *during*
+    /// `startMonitoring`, and the extension matches it against the App Group goal
+    /// list — so the new list must already be there, or the nudge shows the old limit.
+    @Test func writesGoalListBeforeStartMonitoringRuns() throws {
+        let defaults = freshDefaults(#function)
+        defaults.set(
+            try JSONEncoder().encode([
+                GoalSummary(goalId: 1, eventName: "total", limitSeconds: 3600, targetLabel: "All Apps", appBundleId: nil)
+            ]),
+            forKey: AppGroupKeys.goalsActive
+        )
+        var limitsDuringStart: [String: Int] = [:]
+
+        _ = try MonitoringPlan.register(
+            summaries: summaries,
+            defaults: defaults,
+            now: utc(2026, 9, 8, 12, 0),
+            calendar: calendar("UTC")
+        ) { _, _ in
+            for summary in MonitoringPlan.loadSummaries(from: defaults) {
+                limitsDuringStart[summary.eventName] = summary.limitSeconds
+            }
+        }
+
+        #expect(limitsDuringStart == ["total": 7200, "session.timeout": 2700],
+                "the extension must see the new limits while startMonitoring runs")
+    }
+
+    @Test func restoresPreviousGoalListWhenStartMonitoringThrows() throws {
+        let defaults = freshDefaults(#function)
+        let previous = [
+            GoalSummary(goalId: 1, eventName: "total", limitSeconds: 3600, targetLabel: "All Apps", appBundleId: nil)
+        ]
+        let previousData = try JSONEncoder().encode(previous)
+        defaults.set(previousData, forKey: AppGroupKeys.goalsActive)
+
+        #expect(throws: Boom.self) {
+            _ = try MonitoringPlan.register(
+                summaries: summaries,
+                defaults: defaults,
+                now: utc(2026, 9, 8, 12, 0),
+                calendar: calendar("UTC")
+            ) { _, _ in throw Boom() }
+        }
+
+        #expect(defaults.data(forKey: AppGroupKeys.goalsActive) == previousData)
+    }
+
+    @Test func removesGoalListWhenFailingWithNoPreviousList() throws {
+        let defaults = freshDefaults(#function)
+
+        #expect(throws: Boom.self) {
+            _ = try MonitoringPlan.register(
+                summaries: summaries,
+                defaults: defaults,
+                now: utc(2026, 9, 8, 12, 0),
+                calendar: calendar("UTC")
+            ) { _, _ in throw Boom() }
+        }
+
+        #expect(defaults.object(forKey: AppGroupKeys.goalsActive) == nil)
+    }
+
     @Test func writesGoalsAndSignatureOnSuccess() throws {
         let defaults = freshDefaults(#function)
 
