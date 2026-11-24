@@ -6,7 +6,7 @@
 //
 // Routing logic:
 //   1. If the sender has any PENDING friend rows → treat as a consent reply
-//        YES  → set status = accepted
+//        YES  → set status = accepted, push "<name> accepted" to each app user (best-effort)
 //        NO   → delete the row (social preference, not regulatory)
 //        STOP → set status = blocked (Twilio regulatory compliance)
 //   2. Otherwise → treat as a nudge reply
@@ -141,8 +141,22 @@ async function handleConsentReply(
 
   if (YES_KEYWORDS.has(keyword)) {
     const ids = pendingFriends.map((f) => f.id);
-    await db.from('friend').update({ status: 'accepted' }).in('id', ids);
-    console.log(`[receive-reply] Consent accepted for friend ids=${ids}`);
+    const { data: acceptedRows, error: acceptError } = await db
+      .from('friend')
+      .update({ status: 'accepted' })
+      .in('id', ids)
+      .select('id, user_id, friend_name');
+
+    if (acceptError) {
+      console.error(
+        `[receive-reply] Failed to accept friend ids=${ids}:`,
+        acceptError
+      );
+    } else {
+      console.log(`[receive-reply] Consent accepted for friend ids=${ids}`);
+      // Only after the update succeeded, and only for the rows it actually changed.
+      await notifyFriendAccepted(db, (acceptedRows ?? []) as FriendRow[]);
+    }
 
     // Look up the app user's first name to personalise the thank-you.
     // If multiple users added this number, use the first one's name.
@@ -177,6 +191,39 @@ async function handleConsentReply(
     console.log(
       `[receive-reply] Unrecognised consent reply from ${fromPhone}: "${keyword}"`
     );
+  }
+}
+
+// One phone number can be a pending friend of several app users: each accepted row's
+// owner gets their own push. Best-effort — never throws, so a push failure can't affect
+// the status update (already committed) or the thank-you SMS that follows.
+async function notifyFriendAccepted(
+  db: ReturnType<typeof createClient>,
+  acceptedRows: FriendRow[]
+) {
+  try {
+    const results = await Promise.allSettled(
+      acceptedRows.map((row) =>
+        pushToUser(
+          db,
+          row.user_id,
+          `${row.friend_name} accepted`,
+          `${row.friend_name} agreed to be your Nudge friend. ` +
+            `They'll get a text when you need a nudge.`,
+          { type: 'friend_accepted', friend_id: row.id }
+        )
+      )
+    );
+    results.forEach((result, i) => {
+      if (result.status === 'rejected') {
+        console.error(
+          `[receive-reply] Friend-accepted push failed for friend id=${acceptedRows[i].id}:`,
+          result.reason
+        );
+      }
+    });
+  } catch (err) {
+    console.error('[receive-reply] Friend-accepted push failed:', err);
   }
 }
 
@@ -265,29 +312,14 @@ async function deliverReplyToAppUser(
   nudgeId: number,
   replyBody: string
 ) {
-  const pushTitle = `Message from ${friend.friend_name}`;
-
   // APNs push to all of the app user's registered devices
-  const { data: tokens } = await db
-    .from('device_tokens')
-    .select('token')
-    .eq('user_id', friend.user_id)
-    .eq('platform', 'apns');
-
-  if (tokens && tokens.length > 0) {
-    await Promise.allSettled(
-      tokens.map((row: { token: string }) =>
-        sendApnsPush(row.token, pushTitle, replyBody, {
-          nudge_id: nudgeId,
-        }).catch((err) =>
-          console.error(
-            `[receive-reply] APNs push failed for token ${row.token}:`,
-            err
-          )
-        )
-      )
-    );
-  }
+  await pushToUser(
+    db,
+    friend.user_id,
+    `Message from ${friend.friend_name}`,
+    replyBody,
+    { nudge_id: nudgeId }
+  );
 
   // SMS to the app user's own phone if they have one set in profile
   const { data: profile } = await db
@@ -308,6 +340,47 @@ async function deliverReplyToAppUser(
     .from('nudge')
     .update({ status: 'reply_delivered' })
     .eq('id', nudgeId);
+}
+
+// ─── Push ──────────────────────────────────────────────────────────────────
+
+type FriendRow = { id: number; user_id: string; friend_name: string };
+
+// Sends one APNs alert to every registered device of an app user. `data` is spread at
+// the top level of the payload beside `aps` (see _shared/apns.ts). Each device is
+// best-effort: a failed send is logged and the others still go out.
+async function pushToUser(
+  db: ReturnType<typeof createClient>,
+  userId: string,
+  title: string,
+  body: string,
+  data: Record<string, unknown>
+): Promise<void> {
+  const { data: tokens, error } = await db
+    .from('device_tokens')
+    .select('token')
+    .eq('user_id', userId)
+    .eq('platform', 'apns');
+
+  if (error) {
+    console.error(
+      `[receive-reply] Device token lookup failed for user ${userId}:`,
+      error
+    );
+    return;
+  }
+  if (!tokens || tokens.length === 0) return;
+
+  await Promise.allSettled(
+    tokens.map((row: { token: string }) =>
+      sendApnsPush(row.token, title, body, data).catch((err) =>
+        console.error(
+          `[receive-reply] APNs push failed for token ${row.token}:`,
+          err
+        )
+      )
+    )
+  );
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

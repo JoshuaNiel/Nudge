@@ -233,39 +233,43 @@ If multiple triggers fire simultaneously (e.g. session timeout + goal breach at 
 - [ ] Store trigger settings in App Group so the monitor extension can read them
 - [ ] Wire `MonitoringRegistrationService` to include `session.timeout` event when enabled
 
-### 5F — APNs iOS Registration `[ ] Not started`
+### 5F — APNs iOS Registration + Push Deep Link `[~] Implemented — pending on-device validation`
 
 Required before push notifications work end-to-end.
 
-- [ ] Enable **Push Notifications** capability on main app target in Xcode (Signing & Capabilities → + Capability → Push Notifications)
-- [ ] In `NudgeApp.swift`, request permission and register:
-  ```swift
-  UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
-      guard granted else { return }
-      DispatchQueue.main.async {
-          UIApplication.shared.registerForRemoteNotifications()
-      }
-  }
-  ```
-- [ ] Create `DeviceTokenService` to store token in Supabase:
+- [ ] Enable **Push Notifications** capability on main app target in Xcode (Signing & Capabilities → + Capability → Push Notifications) — **user does this in Xcode** (adds `aps-environment`)
+- [x] `AppDelegate` via `@UIApplicationDelegateAdaptor` (`Core/AppDelegate.swift`): token / registration-failure callbacks (failure is logged with `os.Logger`, never crashes) and `UNUserNotificationCenterDelegate`
+  - `willPresent` → `[.banner, .sound, .list]` while foregrounded (also applies to the monitor extension's local notifications)
+  - `didReceive` (default tap action only) → parse `nudge_id` → `PushRouter`
+- [x] **Registration never prompts.** `PermissionsView` (onboarding) remains the only place that requests notification permission. `PushRegistration.registerIfAuthorized()` calls `registerForRemoteNotifications()` only when the status is `.authorized` / `.provisional` / `.ephemeral`. Called on every foreground once a user is authenticated (`NudgeApp.onForeground`) and right after `PermissionsView` obtains permission. (Supersedes the earlier `requestAuthorization` snippet in `NudgeApp`.)
+- [x] `DeviceTokenService` (`DeviceTokenServiceProtocol` + `@MainActor` class):
   ```swift
   protocol DeviceTokenServiceProtocol {
-      func registerToken(_ token: Data, userId: UUID) async throws
-  }
-
-  @MainActor
-  class DeviceTokenService: DeviceTokenServiceProtocol {
-      func registerToken(_ token: Data, userId: UUID) async throws {
-          let tokenString = token.map { String(format: "%02x", $0) }.joined()
-          try await supabase.from("device_tokens")
-              .upsert(["user_id": userId, "token": tokenString, "platform": "apns"])
-              .execute()
-      }
+      func registerToken(_ token: String, userId: UUID) async throws   // upsert, onConflict "user_id,token"
+      func deleteToken(_ token: String, userId: UUID) async throws
   }
   ```
-- [ ] Handle `application(_:didRegisterForRemoteNotificationsWithDeviceToken:)` — call `DeviceTokenService.registerToken`
-- [ ] Handle incoming push payload — deep-link to `NudgeHistoryView` for the relevant friend
-  - Payload shape: `{ nudge_id: Int }` (set by `receive-reply` in `sendApnsPush`)
+  - Takes the **hex string**, not `Data`: hex-encoding happens once at the UIKit boundary (`DeviceToken.hexString(from:)`, pure + unit-tested) and the same string is persisted and used for delete.
+  - Upserts `DeviceTokenInsert { user_id, token, platform = "apns", updated_at = now }` (Encodable + CodingKeys) with `returning: .minimal`. `updated_at` is sent explicitly so a re-upsert refreshes stale rows.
+- [x] **Token lifecycle** — `PushTokenManager` (`Core/PushTokenManager.swift`, owned by `AppState`):
+  - Latest token persisted in standard `UserDefaults` (`apnsDeviceToken`) — it is device-scoped, not user-scoped.
+  - A token that arrives before auth is ready is uploaded as soon as a user signs in (`AppState.onSignedIn`).
+  - Each (user, token) pair is uploaded at most once per process; a failed upload retries on the next token callback / sign-in.
+  - **Sign-out** goes through `AppState.signOut()`: best-effort delete of this device's row *before* `supabase.auth.signOut()` (RLS needs the JWT). The delete is time-boxed (5 s) and its failure is logged and ignored — sign-out always proceeds. The local token is kept for the next sign-in.
+- [x] **Deep link** — tapping a reply push opens that friend's `NudgeHistoryView`:
+  - Payload: `apns.ts` spreads custom data at the **top level** beside `aps`: `{ "aps": {...}, "nudge_id": 17 }`. `PushPayload.nudgeId(from:)` accepts Int / NSNumber (incl. integral float) / numeric String; rejects missing, booleans, fractional, non-positive and garbage values.
+  - `PushRouter` (`ObservableObject`, owned by `AppDelegate`, injected via `.environmentObject`) holds `pendingNudgeId`; `consumePendingNudgeId()` returns-and-clears so exactly one consumer acts on a tap.
+  - `ContentView`'s `TabView` is selection-driven (`AppTab`); while an id is pending it switches to **Friends** (`onChange(initial: true)` covers cold start).
+  - `SocialView` uses value-based navigation (`NavigationStack(path:)` + `SocialRoute.nudgeHistory(Friend)`). After its friend list loads (cold start / tab switch) or when a new id arrives (warm start), it consumes the id, resolves it via `SocialViewModel.friendForNudge(id:userId:)` → `FriendService.fetchFriendId(forNudgeId:)` (RLS restricts to the user's own nudges), refetches the friend list once if the friend isn't loaded, and sets `path = [.nudgeHistory(friend)]`.
+  - Nudge not found / not the user's / friend not accepted / network error → stays on the Friends list. **No error alert.**
+  - Pending id lives in memory only. If the user isn't signed in / hasn't finished onboarding, it waits until `ContentView` appears.
+- [x] Tests: `NudgeTests/APNsTests.swift` (hex encoding, `DeviceTokenInsert` keys, payload parsing incl. nesting, router transitions, registration status gate, `PushTokenManager` lifecycle incl. pre-auth token / dedupe / retry / sign-out delete + timeout, deep-link resolution with a mock `FriendServiceProtocol`).
+
+**APNs environment (server):** `_shared/apns.ts` already selects the host from the `APNS_SANDBOX` secret — `"true"` → `api.sandbox.push.apple.com`, anything else → `api.push.apple.com`. Xcode/development builds get **sandbox** tokens, so `APNS_SANDBOX=true` must be set while testing dev builds; TestFlight/App Store builds need it unset/`false`. The flag is global, so one project can't serve dev and production tokens at the same time (see backlog idea: store the environment per token).
+
+**Known limitations (deferred):**
+- ~~Tapping a push for the friend whose history is already on screen doesn't refetch that history (path value unchanged).~~ Fixed by 5H (realtime UPDATE + foreground refetch).
+- Rows for rotated/uninstalled tokens, or for a user whose session expired without signing out on a shared device, aren't removed client-side (RLS only allows deleting your own rows). Server-side pruning on APNs `410 Unregistered` / `400 BadDeviceToken` would fix this.
 
 ### 5G — User Phone Number in Settings `[ ] Not started`
 
@@ -276,7 +280,159 @@ The app user can optionally add their own phone number so they receive the frien
 - [ ] Save to `profile.phone_number` via `AuthService.updateProfile`
 - [ ] Display note: "Used only to receive your friend's replies as a text message. You can opt out at any time."
 
+### 5H — Real-time Nudge Status `[~] Implemented — pending migration + on-device validation`
+
+The nudge history screen updates live when a nudge is sent or a friend replies — no manual refresh.
+
+- [x] **Migration `supabase/migrations/006b_realtime_nudge.sql`** — idempotently adds `public.nudge` to the `supabase_realtime` publication (`do $$` block checks `pg_publication_tables`). Named `006b` because another branch adds a `006`; the two are independent and can run in either order. **No RLS change**: Realtime Postgres Changes evaluates the existing "Users can read their own nudges" select policy as the subscribing user, so each user only receives their own nudges.
+- [x] **`NudgeRealtimeService`** (`Services/NudgeRealtimeService.swift`, `NudgeRealtimeServiceProtocol` + `@MainActor` class):
+  ```swift
+  enum NudgeChange: Equatable { case inserted(Nudge), updated(Nudge), subscribed }
+  protocol NudgeRealtimeServiceProtocol {
+      func changes(friendId: Int) -> AsyncStream<NudgeChange>
+  }
+  ```
+  - One channel per call, unique topic `nudge-history-<friendId>-<uuid>` (`supabase.channel(_:)` returns an existing channel for a reused topic, which could be one a previous screen is still leaving).
+  - Two bindings registered before `subscribeWithError()`: `postgresChange(InsertAction.self, …)` and `postgresChange(UpdateAction.self, …)` on `public.nudge` with `filter: .eq("friend_id", value: friendId)`. DELETE is not subscribed (nudges are only deleted by FK cascade when the friend is removed).
+  - Records decode with `JSONObject.decode(as: Nudge.self, decoder: PostgrestClient.Configuration.jsonDecoder)` — the same decoder as history fetches, so the existing snake_case `CodingKeys` apply and microsecond `+00:00` timestamps parse. An undecodable record is logged and skipped.
+  - Yields `.subscribed` on every transition into `RealtimeChannelStatus.subscribed` — the first join and each automatic rejoin after a socket reconnect.
+  - Stream termination (consumer stops / task cancelled) cancels the listener tasks, waits for any in-flight join to settle, then `supabase.removeChannel(channel)` (sends `leave`; the socket disconnects when no channels remain). No channel survives leaving the screen.
+  - Subscribe failure (`RealtimeError.maxRetryAttemptsReached`, etc.) is logged with `os.Logger` and non-fatal — the stream just yields nothing.
+- [x] **`NudgeHistoryViewModel`** (`Features/Social/NudgeHistoryViewModel.swift`, two-init pattern; production init takes `friendId`, test init injects `FriendServiceProtocol` + `NudgeRealtimeServiceProtocol`). Replaces the `@State` that lived in `NudgeHistoryView`.
+  - `start()` (run from `.task`): opens the stream first (join overlaps the fetch; events buffer), then `load()` if the list is empty, else a silent `refresh()` (re-appearing keeps the list, no spinner), then applies each change until cancelled / the stream ends.
+  - `load()`: spinner + error state, as before. `refresh()`: silent; failure keeps the current list (logged), and is shown only when there is nothing on screen.
+  - `.subscribed` → `refresh()` (covers anything missed while disconnected, including the gap between the first fetch and the join).
+  - `sceneDidBecomeActive()` → `refresh()` only while `start()` is running (screen visible).
+  - Stale-response guard: every fetch and every applied realtime change bumps a generation counter; a fetch that returns after a newer fetch/change is discarded.
+- [x] **Merge rules** (`NudgeHistoryMerge`, pure): order is newest `sent_timestamp` first, tie → higher id first (same as the query, made deterministic). INSERT of a new id → added in order. INSERT of an id already present → **no-op** (the held row is at least as new, e.g. already `replied`). UPDATE of a known id → replaced. UPDATE of an **unknown id → inserted** (its INSERT was missed while disconnected / before load; the UPDATE is the freshest state; RLS + the filter guarantee it is this friend's). Records whose `friend_id` differs → ignored (defensive).
+- [x] **View** (`NudgeHistoryView` in `SocialView.swift`): `@StateObject` view model; `.task { await viewModel.start() }` (auto-cancelled on disappear — subscription only lives while the history is visible); `.onChange(of: scenePhase)` → `sceneDidBecomeActive()`; `.refreshable` on the list, and the empty / error states are scrollable so pull-to-refresh retries from them too.
+- [x] Fixes the 5F limitation: tapping a reply push while that friend's history is already open now shows the reply — via the realtime UPDATE, and via the foreground refetch when the tap brings the app back from the background.
+- [x] Tests: `NudgeTests/RealtimeNudgeTests.swift` — merge rules (insert new / older / duplicate, update existing / unknown, other friend, `.subscribed`, ordering + tie-break), Realtime record decoding (insert with nulls + microsecond timestamp, replied update, `reply_delivered`, missing column throws), view model load / error / retry / refresh-keeps-list, and the stream (insert + update applied, other friend ignored, `.subscribed` refetches, stream end returns cleanly, cancel terminates the stream, re-appear opens exactly one new stream without spinner, foreground refetch only while observing).
+
+**Known limitations:**
+- If the socket is already dead when the screen closes, `removeChannel` → `unsubscribe()` waits for a server ack that may never come; the detached cleanup task then lingers (no UI effect; the channel is not re-used because topics are unique).
+- Realtime does not replay events missed while disconnected — covered by the refetch on every rejoin.
+
 ---
+
+### 5I — Live Friends list + "friend accepted" notification `[ ] Spec approved by the user 2026-11-23 — implementing`
+
+Builds on 5H (same Realtime pattern) and 5F (same APNs + push-routing pattern).
+
+**1. Friends list row fix.** A friend row in `SocialView` stays shaded after navigating back
+from the history (a SwiftUI `List` + `NavigationLink(value:)` with a programmatic `path`).
+Replace the accepted-friend `NavigationLink` with a plain `Button` that appends
+`SocialRoute.nudgeHistory(friend)` to `path`, showing the same trailing chevron so it looks
+unchanged. Swipe-to-delete keeps working.
+
+**2. Live Friends list** (user-approved recommendations a, b, d):
+- While the Friends tab's list is on screen, subscribe to Realtime Postgres Changes on
+  `public.friend` for **INSERT and UPDATE**, filtered `user_id=eq.<current user>`. RLS
+  ("Users can read their own friend contacts") is the security boundary; the filter only
+  narrows it.
+  - INSERT → add the row. UPDATE → replace the row, so `pending → accepted` moves it from
+    *Pending* to *Friends*, and a rename shows. `status = blocked` → drop it from the list,
+    since blocked friends aren't shown today.
+- **No DELETE subscription.** Realtime can't apply RLS to delete events. Declines or deletions
+  from elsewhere appear on the next load.
+- Re-fetch after every (re)connect and on returning to the foreground, as in 5H.
+- **Pull-to-refresh** on the list, the empty state and the error state.
+- One channel per visible list; it's removed when the screen goes away. Ordering and dedupe
+  follow the existing load order.
+- **Migration `006c_realtime_friend.sql`:** add `public.friend` to the `supabase_realtime`
+  publication. Idempotent, independent of the other migrations, and no policy changes.
+- Out of scope (backlog): the latest nudge status shown on each row.
+
+**3. "Friend accepted" notification** (the user chose to build it now, not backlog it):
+- **Server (`receive-reply`, YES branch of `handleConsentReply`):** after the
+  `status = accepted` update succeeds, for **each** accepted friend row (one phone number can
+  be a pending friend of several users), send an APNs push to all of that row's `user_id`
+  device tokens:
+  - title: **"<friend_name> accepted"**
+  - body: **"<friend_name> agreed to be your Nudge friend. They'll get a text when you need a nudge."**
+  - data: `{ "type": "friend_accepted", "friend_id": <id> }`
+  - Best-effort: a push failure is logged and never affects the database update or the
+    thank-you SMS.
+  - DRY: extract the token lookup + `sendApnsPush` loop from `deliverReplyToAppUser` into a
+    shared `pushToUser(db, userId, title, body, data)` helper used by both.
+- **No notification** for a decline (NO) or STOP.
+- **App:** `PushPayload` also parses `type == "friend_accepted"` with a positive `friend_id`.
+  Tapping it switches to the **Friends tab** (no history opened; the friend is already in
+  the list). Reply pushes (`nudge_id`) behave as before. Unknown or malformed payloads open
+  the app normally with no routing. The foreground banner already works
+  (`foregroundPresentationOptions`).
+- **User action:** redeploy `receive-reply`.
+- **Limit:** the server side can't be exercised end to end until SMS works. The app side is
+  tested with `xcrun simctl push`.
+
+**Done when**
+- Unit tests: payload parsing (friend_accepted valid, missing or invalid id, unknown type,
+  reply payloads unchanged); router → Friends tab; friends-list merge rules (insert, update
+  pending→accepted, rename, blocked removed, no duplicates); refetch on reconnect.
+- On the Simulator: SQL `update friend set status='accepted'` on a pending row makes it move
+  live; a SQL insert appears live; no highlight after going back; a simulated
+  friend_accepted push shows a banner and tapping it opens the Friends tab.
+
+### 5J — Friend screen: every friend tappable, rename, remove `[ ] Spec approved by the user 2026-11-23 — implementing`
+
+Follows 5I on the same branch (#20).
+
+**1. Row styling.** Friend rows (accepted and pending) use normal text colours (primary name,
+secondary phone number), not the button tint. Use `.buttonStyle(.plain)` or an equivalent,
+plus a trailing chevron. 5I's row-highlight fix must keep working: no lingering shading
+after going back.
+
+**2. Every friend is tappable.** Accepted and pending rows both push one **friend screen**
+(rename `SocialRoute.nudgeHistory` to a friend route if that's cleaner; the history content
+is unchanged).
+- **Header:** friend name and phone number.
+- **Accepted:** the live nudge history from 5H, as today (pull-to-refresh, live updates).
+- **Pending:** no history, and no realtime nudge channel opened. Instead an "Awaiting
+  consent" state: *"<Name> hasn't replied YES yet. Nudges start once they accept."*
+- **Live status change:** the screen reads the friend from the Friends list's live state (5I)
+  rather than a stale copy. If the friend becomes accepted while it's open, it switches to
+  the history. If the friend becomes blocked or disappears (deleted elsewhere or by a refresh),
+  the screen pops back to the list.
+- Push deep links keep working (a nudge-reply tap opens the friend screen with the history).
+
+**3. Rename.**
+- An **Edit** toolbar button opens a sheet with a name `TextField` (prefilled), Cancel and
+  Save.
+- **Validation:** after trimming, not empty and ≤ 100 characters (`friend_name varchar(100)`
+  plus the non-blank check). Save is disabled when invalid; an inline hint explains why.
+- **Save:** calls `FriendService.updateFriendName(id:name:)` with the trimmed name. A spinner
+  shows and the controls are disabled while saving.
+- **On success:** the sheet closes, and the header and list show the new name right away
+  (local update; the realtime UPDATE echo is deduped by 5I's merge rules).
+- **On failure:** an inline error, the edit is kept, and the user can retry.
+- The phone number can't be edited (consent is tied to the number).
+
+**4. Remove friend.**
+- A destructive **"Remove Friend"** button at the bottom of the friend screen (pending and
+  accepted).
+- **Confirmation:** "Remove <Name>? They'll stop receiving nudges from you, and your nudge
+  history with them will be deleted." Remove / Cancel.
+- **On confirm:** `FriendService.deleteFriend(id:)` (cascades the nudges). On success it pops
+  to the list, and the friend is gone right away (local removal). On failure an error shows
+  and nothing changes.
+- Swipe-to-delete on the list stays for now (backlog: replace swipe-to-delete app-wide).
+
+**Out of scope (backlog):** resending the consent SMS to a pending friend; editing the phone
+number.
+
+**Done when**
+- Unit tests:
+  - rename validation (blank, whitespace only, 100 vs 101 characters, trimming);
+  - rename success updates the list and the screen; a failure keeps the edit and shows the error;
+  - remove success pops and removes; a failure keeps the friend;
+  - the pending screen opens no nudge channel;
+  - pending → accepted switches the content;
+  - blocked or missing → pop.
+- On the Simulator:
+  - rows aren't blue;
+  - a pending friend opens the awaiting-consent screen, and a SQL accept switches it live;
+  - rename shows everywhere;
+  - Remove Friend asks for confirmation, then removes the friend.
 
 ## Data Contracts
 
@@ -387,9 +543,9 @@ create policy "users manage own device tokens"
 - [x] Rate limit: max 10 nudges per friend per local day
 
 ### Still Needed
-- [ ] APNs push registered on device; token stored in `device_tokens` table
-- [ ] Incoming push deep-links to NudgeHistoryView for the relevant friend
+- [~] APNs push registered on device; token stored in `device_tokens` table (code done — needs Push capability + on-device check)
+- [~] Incoming push deep-links to NudgeHistoryView for the relevant friend (code done — needs on-device check)
 - [ ] App user's phone number field in Settings
 - [ ] Nudge trigger system implemented (blocked on Phase 1 / Family Controls entitlement)
 - [ ] Nudge trigger settings UI (threshold configuration)
-- [ ] Real-time nudge status update in UI when `replied` / `reply_delivered` fires
+- [~] Real-time nudge status update in UI when `replied` / `reply_delivered` fires (code done — needs migration `006b_realtime_nudge.sql` + on-device check)

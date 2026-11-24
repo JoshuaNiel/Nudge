@@ -20,8 +20,15 @@ class AppState: ObservableObject {
     /// Configured session timeout in minutes (nil = disabled).
     @Published var sessionTimeoutMinutes: Int? = nil
 
+    /// "Account Deleted" page + where onboarding starts after it (account-deletion spec D).
+    /// In memory only — never persisted.
+    @Published private(set) var postDeletion = PostDeletionRouting()
+
     let authService = AuthService()
     private let friendService = FriendService()
+
+    /// This device's APNs token, uploaded for whichever user is signed in.
+    let pushTokens = PushTokenManager()
 
     init() {
         Task {
@@ -44,6 +51,7 @@ class AppState: ObservableObject {
             case .signedIn:
                 currentUser = session?.user
                 isAuthenticated = session != nil
+                postDeletion.signedIn()
                 let status = AuthorizationCenter.shared.authorizationStatus
                  print("[NudgeApp] Family Controls authorization status: \(status)")
                 if let session {
@@ -62,11 +70,31 @@ class AppState: ObservableObject {
                 currentUser = nil
                 isAuthenticated = false
                 userFirstName = ""
+                pushTokens.userDidSignOut()
                 clearAppGroup()
             default:
                 break
             }
         }
+    }
+
+    // MARK: - Sign out
+
+    /// Signs the user out, first removing this device's push token so a signed-out device
+    /// stops receiving the user's reply pushes. The token delete must run while the session
+    /// is still valid (RLS), and is best-effort: sign-out proceeds even if it fails.
+    func signOut() async throws {
+        if let userId = currentUser?.id {
+            await pushTokens.unregisterDevice(userId: userId)
+        }
+        try await authService.signOut()
+    }
+
+    // MARK: - Account deleted (spec D)
+
+    /// "Back to Sign In": clears the Account Deleted page; onboarding resumes at `.auth`.
+    func backToSignInAfterDeletion() {
+        postDeletion.backToSignIn()
     }
 
     // MARK: - App Group sync
@@ -77,6 +105,7 @@ class AppState: ObservableObject {
         writeSecretsToAppGroup(session: session)
         await fetchAndCacheProfile(userId: session.user.id)
         await syncFriendsToAppGroup(userId: session.user.id)
+        await pushTokens.userDidSignIn(userId: session.user.id)
     }
 
     /// Writes the three App Group secrets the monitor extension needs to call send-nudge.
@@ -141,5 +170,13 @@ class AppState: ObservableObject {
         defaults?.removeObject(forKey: AppGroupKeys.userFirstName)
         defaults?.removeObject(forKey: AppGroupKeys.friendsAccepted)
         defaults?.removeObject(forKey: AppGroupKeys.goalsActive)
+    }
+}
+
+extension AppState: AccountDeletedPresenting {
+    /// Called by the deletion flow once the server confirms, *before* local cleanup ends the
+    /// session — so RootView switches to the page before `.signedOut` flips `isAuthenticated`.
+    func presentAccountDeleted() {
+        postDeletion.accountDeleted()
     }
 }

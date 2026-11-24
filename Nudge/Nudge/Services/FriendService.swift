@@ -9,6 +9,8 @@ protocol FriendServiceProtocol {
     func deleteFriend(id: Int) async throws
     func updateFriendName(id: Int, name: String) async throws
     func fetchNudgeHistory(friendId: Int) async throws -> [Nudge]
+    /// The friend a nudge was sent to, or nil if the nudge doesn't exist / isn't the user's (RLS).
+    func fetchFriendId(forNudgeId nudgeId: Int) async throws -> Int?
 }
 
 // MARK: - Service
@@ -63,5 +65,24 @@ class FriendService: FriendServiceProtocol {
             .order("sent_timestamp", ascending: false)
             .execute()
             .value
+    }
+
+    func fetchFriendId(forNudgeId nudgeId: Int) async throws -> Int? {
+        struct NudgeFriendRow: Decodable {
+            let friendId: Int
+            enum CodingKeys: String, CodingKey {
+                case friendId = "friend_id"
+            }
+        }
+
+        // Array + limit instead of .single(): zero rows is a normal "not found", not an error.
+        let rows: [NudgeFriendRow] = try await supabase
+            .from("nudge")
+            .select("friend_id")
+            .eq("id", value: nudgeId)
+            .limit(1)
+            .execute()
+            .value
+        return rows.first?.friendId
     }
 }

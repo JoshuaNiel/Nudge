@@ -50,3 +50,31 @@ enum PasswordRules {
         return nil
     }
 }
+
+// MARK: - Friend name
+
+extension String {
+    /// `friend.friend_name` is `varchar(100)` with a non-blank check.
+    static let friendNameMaxLength = 100
+
+    /// The name as it is stored: surrounding whitespace and newlines removed.
+    var trimmedFriendName: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// True when the trimmed name is non-blank and fits the column.
+    var isValidFriendName: Bool { friendNameValidationError == nil }
+
+    /// Why the name can't be saved, or nil if it can. Checked after trimming.
+    ///
+    /// Length is counted in Unicode scalars, the unit Postgres uses for `varchar(n)` in UTF-8,
+    /// so a name accepted here is never rejected by the column.
+    var friendNameValidationError: String? {
+        let name = trimmedFriendName
+        if name.isEmpty { return "Name can't be empty." }
+        if name.unicodeScalars.count > Self.friendNameMaxLength {
+            return "Name must be \(Self.friendNameMaxLength) characters or fewer."
+        }
+        return nil
+    }
+}

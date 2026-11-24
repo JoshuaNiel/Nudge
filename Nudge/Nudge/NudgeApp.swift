@@ -6,6 +6,7 @@ internal import Auth
 
 @main
 struct NudgeApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
     /// App-level so its sheets sit above RootView and survive its auth-driven branch switches.
     @StateObject private var authRecovery = AuthRecoveryCoordinator()
@@ -26,6 +27,14 @@ struct NudgeApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(appState)
+                .environmentObject(appDelegate.pushRouter)
+                .task {
+                    // Route APNs tokens from the UIKit delegate to the session-aware manager.
+                    // The delegate buffers a token that arrives before this runs.
+                    appDelegate.setDeviceTokenHandler { [appState] token in
+                        Task { await appState.pushTokens.didReceiveDeviceToken(token) }
+                    }
+                }
                 .environmentObject(authRecovery)
                 .sheet(item: $authRecovery.activeSheet, onDismiss: authRecovery.sheetDidDismiss) { sheet in
                     switch sheet {
@@ -71,6 +80,10 @@ struct NudgeApp: App {
             return
         }
         pendingForegroundSync = false
+
+        // Never prompts — onboarding's PermissionsView owns the permission request. Re-registering
+        // each foreground keeps the stored token fresh (APNs may rotate it).
+        await PushRegistration.registerIfAuthorized()
 
         await refreshMonitoring(userId: userId)
 

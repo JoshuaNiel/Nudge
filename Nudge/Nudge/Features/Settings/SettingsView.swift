@@ -4,6 +4,7 @@ import Supabase
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @StateObject var viewModel = SettingsViewModel()
+    @StateObject private var deletionViewModel = AccountDeletionViewModel()
     @FocusState private var focusedField: Field?
     @FocusState private var phoneFocused: Bool
 
@@ -16,7 +17,10 @@ struct SettingsView: View {
             Form {
                 accountSection
                 profileSection
+                deleteAccountSection
             }
+            // Nothing else may run (sign out, save) while the account is being deleted.
+            .disabled(deletionViewModel.isDeleting)
             .navigationTitle("Settings")
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
@@ -31,7 +35,22 @@ struct SettingsView: View {
             // NOTE: keyboard-immune "pin like the tab bar" is deferred (see backlog).
             .safeAreaInset(edge: .bottom) {
                 saveBar
+                    .disabled(deletionViewModel.isDeleting)
             }
+        }
+        // The ViewModel decides when the sheet is up (confirming / deleting / failed). The
+        // only dismissal SwiftUI can write is a swipe, which maps to Cancel; it is disabled
+        // while deleting, and `cancelDeletion()` ignores it in any other state.
+        .sheet(
+            isPresented: Binding(
+                get: { deletionViewModel.isSheetPresented },
+                set: { isPresented in
+                    if !isPresented { deletionViewModel.cancelDeletion() }
+                }
+            )
+        ) {
+            DeleteAccountSheet(viewModel: deletionViewModel)
+                .environmentObject(appState)
         }
         .task {
             if let user = appState.currentUser {
@@ -48,11 +67,28 @@ struct SettingsView: View {
 
             Button(role: .destructive) {
                 Task {
-                    try? await appState.authService.signOut()
+                    try? await appState.signOut()
                 }
             } label: {
                 Text("Sign Out")
             }
+        }
+    }
+
+    // MARK: - Delete Account (bottom, separate from Sign Out)
+
+    private var deleteAccountSection: some View {
+        Section {
+            Button(role: .destructive) {
+                focusedField = nil
+                phoneFocused = false
+                deletionViewModel.requestDeletion()
+            } label: {
+                Text("Delete Account")
+            }
+            .disabled(deletionViewModel.isSheetPresented)
+        } footer: {
+            Text("Permanently deletes your account and all of its data.")
         }
     }
 
