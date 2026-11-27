@@ -6,7 +6,8 @@ import Supabase
 
 // Email/password sign-in and sign-up (docs/specs/auth-recovery.md, section C).
 // C1: sign-up uses PasswordRules and maps the server's weak_password.
-// C3: sign-in before confirming shows a message plus a Resend action.
+// C3: sign-in before confirming shows a message plus a Resend action, which repeats
+// the sign-up with the captured credentials (never `auth.resend`).
 // The SDK calls are behind AuthEmailServiceProtocol; nothing here touches a server.
 
 // MARK: - Sign-up validation (C1)
@@ -181,6 +182,8 @@ struct AuthViewModelEmailNotConfirmedTests {
 
     private func unconfirmedModel(_ mock: MockAuthEmailService) async -> AuthViewModel {
         mock.signInError = authAPIError(code: .emailNotConfirmed, status: 400)
+        // A repeat sign-up of an unconfirmed address returns no session.
+        mock.signUpNeedsConfirmation = true
         let vm = AuthViewModel(service: mock)
         vm.email = "grace@example.com"
         vm.password = "whatever"
@@ -214,26 +217,36 @@ struct AuthViewModelEmailNotConfirmedTests {
         #expect(vm.canResendConfirmation == false)
     }
 
-    @Test func resendSendsToTheUnconfirmedEmail() async {
+    // Resend repeats the original sign-up (PKCE), never `auth.resend` (spec C3, 2026-11-27).
+
+    @Test func resendRepeatsSignUpWithCapturedCredentials() async {
         let mock = MockAuthEmailService()
         let vm = await unconfirmedModel(mock)
-        // Editing the field afterwards doesn't change where the email goes.
-        vm.email = "other@example.com"
+        // Editing the password field afterwards doesn't change what is sent.
+        vm.password = "typed-later"
 
-        await vm.resendConfirmation()
+        let signedIn = await vm.resendConfirmation()
 
-        #expect(mock.resentEmails == ["grace@example.com"])
+        #expect(signedIn == false)
+        #expect(mock.signUps == [.init(email: "grace@example.com", password: "whatever")])
+        #expect(mock.signIns.count == 1)
         #expect(vm.resendStatus == .sent)
         #expect(vm.resendMessage == AuthViewModel.resendSentMessage)
+    }
+
+    @Test func resendMessageWording() {
+        #expect(AuthViewModel.resendSentMessage == "Email sent. Check your inbox for the new link.")
+        #expect(AuthViewModel.resendFailedMessage == "Couldn't send the email. Try again.")
     }
 
     @Test func resendRateLimitShowsWaitMessage() async {
         let mock = MockAuthEmailService()
         let vm = await unconfirmedModel(mock)
-        mock.resendError = authAPIError(code: .overEmailSendRateLimit, status: 429)
+        mock.signUpError = authAPIError(code: .overEmailSendRateLimit, status: 429)
 
-        await vm.resendConfirmation()
+        let signedIn = await vm.resendConfirmation()
 
+        #expect(signedIn == false)
         #expect(vm.resendStatus == .failed(AuthError.rateLimited.localizedDescription))
         #expect(vm.resendMessage == "Please wait a minute before trying again.")
     }
@@ -241,30 +254,104 @@ struct AuthViewModelEmailNotConfirmedTests {
     @Test func resendHTTP429WithoutCodeIsRateLimit() async {
         let mock = MockAuthEmailService()
         let vm = await unconfirmedModel(mock)
-        mock.resendError = authAPIError(code: .unknown, status: 429)
+        mock.signUpError = authAPIError(code: .unknown, status: 429)
 
         await vm.resendConfirmation()
 
         #expect(vm.resendMessage == "Please wait a minute before trying again.")
     }
 
-    @Test func resendOtherErrorShowsItsDescription() async {
+    @Test func resendOtherErrorShowsGenericMessage() async {
         let mock = MockAuthEmailService()
         let vm = await unconfirmedModel(mock)
-        mock.resendError = URLError(.notConnectedToInternet)
+        mock.signUpError = URLError(.notConnectedToInternet)
 
+        let signedIn = await vm.resendConfirmation()
+
+        #expect(signedIn == false)
+        #expect(vm.resendStatus == .failed(AuthViewModel.resendFailedMessage))
+        #expect(vm.resendMessage == "Couldn't send the email. Try again.")
+    }
+
+    @Test func resendFailureKeepsCredentialsForRetry() async {
+        let mock = MockAuthEmailService()
+        let vm = await unconfirmedModel(mock)
+        mock.signUpError = URLError(.timedOut)
+        await vm.resendConfirmation()
+        mock.signUpError = nil
+
+        #expect(vm.canResendConfirmation)
         await vm.resendConfirmation()
 
-        #expect(vm.resendStatus == .failed(URLError(.notConnectedToInternet).localizedDescription))
+        #expect(mock.signUps.count == 2)
+        #expect(vm.resendStatus == .sent)
+    }
+
+    @Test func resendWithSessionSignsIn() async {
+        // Confirmed in the meantime: signUp returns a session, so it's a normal sign-in.
+        let mock = MockAuthEmailService()
+        let vm = await unconfirmedModel(mock)
+        mock.signUpNeedsConfirmation = false
+
+        let signedIn = await vm.resendConfirmation()
+
+        #expect(signedIn)
+        #expect(vm.errorMessage == nil)
+        #expect(vm.unconfirmedEmail == nil)
+        #expect(vm.canResendConfirmation == false)
+    }
+
+    @Test func resendSuccessClearsCapturedPassword() async {
+        let mock = MockAuthEmailService()
+        let vm = await unconfirmedModel(mock)
+        await vm.resendConfirmation()
+
+        #expect(vm.canResendConfirmation == false)
+        await vm.resendConfirmation()
+
+        #expect(mock.signUps.count == 1)
+        #expect(vm.resendStatus == .sent)
+    }
+
+    @Test func changingEmailClearsCapturedCredentials() async {
+        let mock = MockAuthEmailService()
+        let vm = await unconfirmedModel(mock)
+
+        vm.email = "other@example.com"
+
+        #expect(vm.unconfirmedEmail == nil)
+        #expect(vm.canResendConfirmation == false)
+        await vm.resendConfirmation()
+        #expect(mock.signUps.isEmpty)
+    }
+
+    @Test func reassigningSameEmailKeepsCredentials() async {
+        let vm = await unconfirmedModel(MockAuthEmailService())
+
+        vm.email = "grace@example.com"
+
+        #expect(vm.canResendConfirmation)
+    }
+
+    @Test func leavingScreenClearsCapturedCredentials() async {
+        let mock = MockAuthEmailService()
+        let vm = await unconfirmedModel(mock)
+
+        vm.discardCapturedCredentials()
+
+        #expect(vm.canResendConfirmation == false)
+        await vm.resendConfirmation()
+        #expect(mock.signUps.isEmpty)
     }
 
     @Test func resendDoesNothingWithoutUnconfirmedEmail() async {
         let mock = MockAuthEmailService()
         let vm = AuthViewModel(service: mock)
 
-        await vm.resendConfirmation()
+        let signedIn = await vm.resendConfirmation()
 
-        #expect(mock.resentEmails.isEmpty)
+        #expect(signedIn == false)
+        #expect(mock.signUps.isEmpty)
         #expect(vm.resendStatus == .idle)
     }
 
@@ -282,7 +369,8 @@ struct AuthViewModelEmailNotConfirmedTests {
     }
 
     @Test func toggleModeClearsResendState() async {
-        let vm = await unconfirmedModel(MockAuthEmailService())
+        let mock = MockAuthEmailService()
+        let vm = await unconfirmedModel(mock)
 
         vm.toggleMode()
 
@@ -290,6 +378,9 @@ struct AuthViewModelEmailNotConfirmedTests {
         #expect(vm.unconfirmedEmail == nil)
         #expect(vm.errorMessage == nil)
         #expect(vm.password.isEmpty)
+        #expect(vm.canResendConfirmation == false)
+        await vm.resendConfirmation()
+        #expect(mock.signUps.isEmpty)
     }
 
     @Test func mappingHelpers() {
@@ -329,12 +420,10 @@ private final class MockAuthEmailService: AuthEmailServiceProtocol {
 
     var signInError: Error?
     var signUpError: Error?
-    var resendError: Error?
     var signUpNeedsConfirmation = false
 
     var signIns: [Credentials] = []
     var signUps: [Credentials] = []
-    var resentEmails: [String] = []
 
     func signIn(email: String, password: String) async throws {
         signIns.append(.init(email: email, password: password))
@@ -345,11 +434,6 @@ private final class MockAuthEmailService: AuthEmailServiceProtocol {
         signUps.append(.init(email: email, password: password))
         if let signUpError { throw signUpError }
         return signUpNeedsConfirmation
-    }
-
-    func resendSignupConfirmation(email: String) async throws {
-        resentEmails.append(email)
-        if let resendError { throw resendError }
     }
 
     func signInWithApple(credential: ASAuthorizationAppleIDCredential) async throws {}

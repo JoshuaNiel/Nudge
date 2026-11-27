@@ -126,6 +126,7 @@ struct AuthView: View {
                 .padding(.bottom, 40)
             }
         }
+        .onDisappear { viewModel.discardCapturedCredentials() }
     }
 
     private var resendConfirmationSection: some View {
@@ -169,7 +170,9 @@ extension AuthView {
     }
 
     private func resendConfirmation() {
-        Task { await viewModel.resendConfirmation() }
+        Task {
+            if await viewModel.resendConfirmation() { onAuthenticated() }
+        }
     }
 
     // MARK: - Sign in with Apple

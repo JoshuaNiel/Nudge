@@ -646,8 +646,8 @@ struct AuthLinkFailureRedirectTests {
     }
 
     @Test func implicitConfirmationLinkNeedsSignIn() {
-        // A resent confirmation email (no PKCE challenge in SDK 2.43.1's resend) redirects with
-        // tokens in the fragment. /verify has confirmed the email; the app can't sign in from it.
+        // Defensive: an implicit-flow confirmation link (tokens in the fragment, no PKCE code).
+        // /verify has confirmed the email; the app ignores the tokens and asks for sign-in.
         #expect(failure("nudge://auth-callback#access_token=x&refresh_token=y&expires_in=3600&token_type=bearer&type=signup") == .signInRequired)
     }
 

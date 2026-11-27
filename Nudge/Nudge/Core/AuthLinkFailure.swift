@@ -23,9 +23,10 @@ enum AuthLinkFailure: String, Equatable, CaseIterable {
     case alreadyUsed
     case malformed
     case offline
-    /// A confirmation link that confirmed the email but carries no PKCE code: the
-    /// implicit-flow link a resent confirmation email produces (SDK 2.43.1's
-    /// `resend` sends no code challenge). The tokens in it are deliberately unused.
+    /// Defensive: a confirmation link that confirmed the email but carries implicit-flow
+    /// tokens instead of a PKCE code. The app never requests such links (Resend repeats the
+    /// PKCE sign-up rather than calling `auth.resend`), but if one arrives its tokens are
+    /// deliberately ignored and never logged.
     case signInRequired
 
     static let alertTitle = "Link Problem"

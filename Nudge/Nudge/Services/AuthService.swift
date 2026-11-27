@@ -25,10 +25,9 @@ protocol AuthEmailServiceProtocol {
     func signIn(email: String, password: String) async throws
 
     /// Returns `true` when Supabase requires email confirmation before a session exists.
+    /// Also used to resend the confirmation email (a repeat sign-up), because it
+    /// sends a PKCE challenge and `auth.resend` doesn't.
     func signUp(email: String, password: String) async throws -> Bool
-
-    /// Re-sends the sign-up confirmation email, redirecting to `nudge://auth-callback`.
-    func resendSignupConfirmation(email: String) async throws
 
     func signInWithApple(credential: ASAuthorizationAppleIDCredential) async throws
 }
@@ -55,20 +54,6 @@ class AuthService: AuthRecoveryServiceProtocol, AuthEmailServiceProtocol {
 
     func signIn(email: String, password: String) async throws {
         try await supabase.auth.signIn(email: email, password: password)
-    }
-
-    /// Supabase answers success whether or not the account exists (no enumeration).
-    ///
-    /// Note: supabase-swift 2.43.1's `resend` sends no PKCE code challenge, so the
-    /// server sends this email with the implicit flow. Its link still confirms the
-    /// email in `/verify`, but the app (PKCE-only) doesn't sign in from it; see
-    /// `AuthLinkFailure.signInRequired`.
-    func resendSignupConfirmation(email: String) async throws {
-        try await supabase.auth.resend(
-            email: email,
-            type: .signup,
-            emailRedirectTo: AuthDeepLink.emailConfirmation.redirectURL
-        )
     }
 
     func signOut() async throws {
