@@ -16,9 +16,12 @@ struct DeleteAccountSheet: View {
                 }
 
                 Section {
-                    SecureField("Password", text: $viewModel.password)
-                        .textContentType(.password)
-                        .focused($passwordFocused)
+                    PasswordField(
+                        "Password",
+                        text: $viewModel.password,
+                        textContentType: .password,
+                        focused: $passwordFocused
+                    )
                 } header: {
                     Text("Enter your password to confirm")
                 } footer: {

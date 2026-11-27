@@ -35,7 +35,7 @@ class AccountDeletionViewModel: ObservableObject {
     private static let logger = Logger(subsystem: "com.joshuaqn.Nudge", category: "AccountDeletion")
 
     @Published private(set) var state: AccountDeletionState = .idle
-    /// Bound to the sheet's `SecureField`. Cleared after every attempt and on cancel.
+    /// Bound to the sheet's `PasswordField`. Cleared after every attempt and on cancel.
     @Published var password = ""
 
     /// The in-flight deletion, exposed so tests can await completion.

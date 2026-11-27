@@ -48,15 +48,21 @@ struct SetNewPasswordView: View {
 
                 // Fields
                 VStack(spacing: 12) {
-                    SecureField("New password", text: $viewModel.newPassword)
-                        .textContentType(.newPassword)
-                        .textFieldStyle(.roundedBorder)
+                    PasswordField(
+                        "New password",
+                        text: $viewModel.newPassword,
+                        textContentType: .newPassword
+                    )
+                    .textFieldStyle(.roundedBorder)
 
-                    SecureField("Confirm new password", text: $viewModel.confirmPassword)
-                        .textContentType(.newPassword)
-                        .submitLabel(.done)
-                        .onSubmit(submit)
-                        .textFieldStyle(.roundedBorder)
+                    PasswordField(
+                        "Confirm new password",
+                        text: $viewModel.confirmPassword,
+                        textContentType: .newPassword
+                    )
+                    .submitLabel(.done)
+                    .onSubmit(submit)
+                    .textFieldStyle(.roundedBorder)
                 }
                 .padding(.horizontal, 24)
 

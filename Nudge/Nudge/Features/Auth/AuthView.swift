@@ -30,14 +30,20 @@ struct AuthView: View {
                         .autocapitalization(.none)
                         .textFieldStyle(.roundedBorder)
 
-                    SecureField("Password", text: $viewModel.password)
-                        .textContentType(viewModel.mode == .signIn ? .password : .newPassword)
-                        .textFieldStyle(.roundedBorder)
+                    PasswordField(
+                        "Password",
+                        text: $viewModel.password,
+                        textContentType: viewModel.mode == .signIn ? .password : .newPassword
+                    )
+                    .textFieldStyle(.roundedBorder)
 
                     if viewModel.mode == .signUp {
-                        SecureField("Confirm password", text: $viewModel.confirmPassword)
-                            .textContentType(.newPassword)
-                            .textFieldStyle(.roundedBorder)
+                        PasswordField(
+                            "Confirm password",
+                            text: $viewModel.confirmPassword,
+                            textContentType: .newPassword
+                        )
+                        .textFieldStyle(.roundedBorder)
                     }
 
                     if viewModel.mode == .signIn {
