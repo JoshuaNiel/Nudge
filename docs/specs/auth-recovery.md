@@ -91,6 +91,21 @@ The single "This link has expired" alert becomes one alert per reason. Title: "L
   project team members, with a low hourly cap. Real users need custom SMTP.
 - ADR-004 gets an amendment: email confirmation re-enabled 2026-11-23.
 
+### C4. Show/hide password toggle (user decision 2026-11-27)
+iOS clears a `SecureField` when the user returns to it and types (platform behavior). To
+let users see and keep editing a password, every password field gets an eye toggle:
+- One reusable `PasswordField` view (label, binding, `textContentType`). Hidden: a
+  `SecureField`. Shown: a `TextField` (so editing continues at the end). A trailing
+  `eye` / `eye.slash` button switches between them; accessibility labels "Show password" /
+  "Hide password".
+- Default hidden; each field has its own toggle; keyboard focus stays in the field when
+  toggling. No autocapitalization or autocorrection in either mode. The shown state is
+  never persisted.
+- Used everywhere a password is typed: sign-in, sign-up (both fields), Set New Password
+  (both fields), and the Delete Account password sheet.
+- Tests: the toggle's state logic (default hidden, toggles, independent per field) where it
+  is testable without UI; the screens still compile with the new component.
+
 ### Done when
 - **Unit tests:**
   - sign-up password validation (7 rejected, 8 accepted, mismatch, order of messages, no trimming);
