@@ -109,10 +109,6 @@ struct AuthViewModelSignUpValidationTests {
         #expect(vm.confirmationSentTo == "grace@example.com")
     }
 
-    @Test func passwordHintWording() {
-        #expect(AuthViewModel.passwordHint == "Use at least 8 characters.")
-    }
-
     @Test func signInHasNoLengthCheck() async {
         // Existing accounts may have passwords shorter than 8.
         let mock = MockAuthEmailService()

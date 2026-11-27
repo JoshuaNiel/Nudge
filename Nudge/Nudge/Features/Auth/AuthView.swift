@@ -35,11 +35,6 @@ struct AuthView: View {
                         .textFieldStyle(.roundedBorder)
 
                     if viewModel.mode == .signUp {
-                        Text(AuthViewModel.passwordHint)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
                         SecureField("Confirm password", text: $viewModel.confirmPassword)
                             .textContentType(.newPassword)
                             .textFieldStyle(.roundedBorder)

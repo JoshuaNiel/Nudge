@@ -31,8 +31,8 @@
 ### C1. 8-character minimum at sign-up (app + server)
 - **App:** sign-up uses `PasswordRules.validationError(password:confirmation:)`, the same
   rule and messages as Set New Password ("Password must be at least 8 characters." /
-  "Passwords do not match."). Length is checked first. Passwords are never trimmed. The
-  sign-up password field shows the hint "Use at least 8 characters." Sign-in is unchanged
+  "Passwords do not match."). Length is checked first. Passwords are never trimmed. No hint
+  under the field (removed at the user's request 2026-11-27; the validation message covers it). Sign-in is unchanged
   (no length check), because existing accounts may have shorter passwords.
 - **Server:** the user sets Supabase Authentication → Providers → Email → *Minimum password
   length* = 8. If Supabase still rejects a password (`weak_password`, e.g. a stricter rule

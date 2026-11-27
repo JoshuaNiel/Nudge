@@ -21,7 +21,6 @@ final class AuthViewModel: ObservableObject {
     }
 
     static let missingFieldsMessage = "Please fill in all fields."
-    static let passwordHint = "Use at least \(PasswordRules.minimumLength) characters."
     static let emailNotConfirmedMessage = "Confirm your email first. Check your inbox for the link."
     static let resendSentMessage = "Email sent. Check your inbox for the new link."
     static let resendFailedMessage = "Couldn't send the email. Try again."
