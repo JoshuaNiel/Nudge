@@ -106,6 +106,51 @@ let users see and keep editing a password, every password field gets an eye togg
 - Tests: the toggle's state logic (default hidden, toggles, independent per field) where it
   is testable without UI; the screens still compile with the new component.
 
+### C5. Confirm-email screen, Resend countdown, "this device", generic 429 (approved 2026-11-27)
+
+**Confirm-email screen.** A dedicated full screen replaces the inline "Check your email" note
+and the inline email-not-confirmed message on the sign-in form. One view, two variants:
+
+| Variant | Shown when | Title | Body |
+|---|---|---|---|
+| After sign-up | `signUp` returned confirmation pending | "You're almost set!" | "We sent a confirmation link to **<email>**. Open it on this device to finish setting up your account." |
+| Unconfirmed sign-in | sign-in refused with `email_not_confirmed` | "Confirm your email to continue" | "We found your account, but your email isn't confirmed yet. Open the link we sent to **<email>** on this device." |
+
+- Buttons: **Resend email** (with countdown) and **Back to Sign In** (returns to the
+  sign-in form with the email prefilled; clears the remembered password).
+- **Countdown:** "Resend in 0:30" counting down to "Resend email". It starts as soon as the
+  screen appears (both variants) and restarts after every resend. Resend can be used again
+  after each countdown, as often as wanted, while on the screen.
+- Resend repeats the PKCE `signUp` with the email and password from this screen (C3). The
+  password is remembered in memory only, **until the user leaves the screen** (this
+  replaces C3's "cleared after one success" rule). It is never logged or persisted.
+- Resend outcomes: success → "Email sent. Check your inbox for the new link." (shown under
+  the button; the countdown restarts). 429 → the generic busy message (below), and the
+  countdown restarts. Other failure → "Couldn't send the email. Try again." If `signUp`
+  returns a session (already confirmed) → normal sign-in.
+- Tapping the link on this device signs in and continues into onboarding as before. The
+  screen is part of the signed-out flow, so a link-driven sign-in moves past it.
+- The countdown is driven by an injectable clock so it can be unit-tested.
+
+**"This device" wording.** Every user-facing "this iPhone" in auth copy becomes "this device",
+including C2's different-device message: "This link was requested on a different device.
+Open it on the device where you asked for it, or request a new one here."
+
+**Generic 429.** Any rate-limit response in the auth flows (`over_email_send_rate_limit`,
+`over_request_rate_limit`, or HTTP 429), for reset requests, sign-in, sign-up, Resend and
+Set New Password, shows **"Our servers are busy right now. Please try again in a moment."**
+This replaces "Please wait a minute before trying again." No special handling for
+Supabase's built-in email limits (custom SMTP is planned).
+
+**Done when (C5)**
+- Unit tests: which variant appears for each trigger; countdown starts at 30 on appear,
+  ticks, enables at 0, restarts after a resend (success and 429); Resend uses the screen's
+  captured credentials; the password is cleared on leaving or Back to Sign In; 429 maps to
+  the busy message in every auth flow; no "iPhone" left in auth copy.
+- On device: sign-up → "You're almost set!" with a running countdown; sign-in to an
+  unconfirmed account → the second variant; Resend after the countdown sends a new email;
+  Back to Sign In works.
+
 ### Done when
 - **Unit tests:**
   - sign-up password validation (7 rejected, 8 accepted, mismatch, order of messages, no trimming);
