@@ -66,9 +66,26 @@ The single "This link has expired" alert becomes one alert per reason. Title: "L
 - **User:** Supabase Authentication → Providers → Email → enable **Confirm email**.
 - **App:** already handles it (sign-up shows "Check <email> for a link…"; the link signs in
   and continues to profile setup). No code change beyond C1/C2, unless testing finds a gap.
-- **Sign-in before confirming:** Supabase returns `email_not_confirmed`. The sign-in screen
-  shows "Confirm your email first. Check your inbox for the link." with a **Resend email**
-  button (`auth.resend(type: .signup)`). Rate limiting uses the existing wait message.
+- **Sign-in before confirming:** Supabase returns `email_not_confirmed`, and only after the
+  password has been verified. The sign-in screen shows "Confirm your email first. Check your
+  inbox for the link." with a **Resend email** button.
+- **Resend = repeat the original sign-up (user decision 2026-11-27).** The button calls
+  `auth.signUp(email:password:redirectTo: <confirmation redirect>)` with the email and
+  password captured when sign-in was refused, **not** `auth.resend`. Reason: SDK 2.43.1's
+  `resend` sends no PKCE challenge, so Supabase would email an implicit-flow link carrying
+  `access_token`/`refresh_token` through the claimable `nudge://` scheme. `signUp` uses PKCE,
+  so the resent link works like the original (same device, signs straight in).
+  - The captured password is kept in memory only, cleared on success, on leaving the
+    sign-in screen, or when the email field changes. It is never logged or persisted.
+  - Success → "Email sent. Check your inbox for the new link." A rate limit → the existing
+    wait message. Any other failure → generic "Couldn't send the email. Try again."
+  - If `signUp` returns a session (email already confirmed in the meantime), treat it as a
+    normal sign-in.
+  - **Assumption to confirm on device:** GoTrue re-sends the confirmation email for a repeat
+    sign-up of an unconfirmed address. If it doesn't, fall back to removing the button
+    (option B).
+  - Any link carrying `access_token` with no code still gets the "Your email is confirmed.
+    Sign in…" message, and its tokens are ignored and never logged (defensive).
 - Existing accounts are already confirmed and aren't affected.
 - **Delivery limit (backlog, before launch):** Supabase's built-in email only sends to
   project team members, with a low hourly cap. Real users need custom SMTP.
