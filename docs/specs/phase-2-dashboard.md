@@ -384,3 +384,53 @@ See onboarding-progress §5d (revised): native large title, ~28pt, all main tabs
 - **Device:** V1 stress check; Day/Week switch; week totals vs. Settings → Screen Time's week
   view (iPhone); Averages = totals ÷ days; Categories match Settings' categories; date picker
   limits; controls' state across day steps (V5 note).
+
+---
+
+## Dashboard v3 — DRAFT (user decisions 2026-11-27, second device test). Not ready to implement.
+
+Second device test: everything in v2 looked good, and the in-report controls **keep their
+selection** across day/week steps (the V5 risk is resolved).
+
+### Decided
+- **W1. Labels:** the week-mode control reads **Total | Daily Average**. It moves out of the
+  summary card and stands alone above it, the same way Apps | Categories sits above its list.
+- **W2. App detail:** tapping an app row (Day or Week) opens a detail screen:
+  - the app's name and icon at the top;
+  - a bar chart of daily usage for the **last 30 days** (to be confirmed: Apple may keep only 28;
+    the spike checks);
+  - three averages:
+    - **this week**: Sunday through today;
+    - **rolling 7 days**: the last 7 days including today;
+    - **30-day**: divided by the number of days that **actually have collected data**, not a
+      hard-coded 30. A collected day with 0 minutes still counts; a day with no data at all
+      (e.g. before install, or past Apple's retention) doesn't.
+- **W3. Category detail:** tapping a category opens the same layout (chart + three averages)
+  plus the list of apps in that category. Tapping one of those opens its app detail.
+- **W4. Filter:** a filter button in the toolbar, next to Refresh, opens Apple's
+  `FamilyActivityPicker` (apps and/or categories). The whole Dashboard shows only the
+  selection; the filter changes only the report's filter (no rebuild).
+  - The button is filled when a filter is active.
+  - While a filter is active, a chip under Day | Week reads "Filtered: 3 apps, 1 category" with
+    a **Clear** button.
+  - Remembered **on this device** (App Group / UserDefaults, encoded selection), never synced.
+
+### Open: architecture (blocked on a device spike)
+The detail screens are drawn by the report extension: only it knows which app was tapped, and
+it can't send that back to the host. They need 30+ days of data while the main view shows the
+selected day/week, but a report receives only one filter (date range + apps/categories). Options:
+- **A.** The host writes the selected period to the App Group. The extension **reads** it, and
+  the filter always spans the last 30+ days plus the selected period. Requires App Group reads
+  to work in the report extension (writes are blocked by the sandbox).
+- **B.** Day | Week, the navigator and the date picker move **into** the extension. The host
+  always sends the last 30+ days. Requires navigation pushes (and ideally sheets) to work inside
+  the report's remote view.
+- Either way: the 30+ day query must fit the extension's ~100 MB memory limit, and a forced
+  rebuild (Refresh/foreground) resets in-extension state (an open detail screen closes).
+
+### Spike (debug-only, separate branch) — to answer on device
+1. Can the report extension read a value the host just wrote to the App Group (UserDefaults
+   suite and a container file)?
+2. A `.daily` filter over 30 / 35 / 60 days: how many segments come back, the earliest day with
+   data, how a day with no data appears (missing vs. 0), time taken and peak memory.
+3. Do `NavigationStack` pushes and `.sheet` presentations work inside the report view?
