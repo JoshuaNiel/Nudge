@@ -284,11 +284,23 @@ on `isRegistrationStale` (stamps only) rather than `shouldRegister` (which also 
 otherwise re-register on every callback forever. The app keeps the `activities` term
 because restart recovery is its job.
 
-**Trade-off:** re-registration restarts the interval, so the day's accumulated progress
-toward a threshold resets. At midnight that costs nothing. It is the reason staleness is
-keyed on a stable signature (sorted, order-independent) rather than raw goal-array
-equality — Supabase returns goal rows in arbitrary order, and an order-sensitive check
-would reset the counters on every foreground.
+**Trade-off (original):** re-registration restarts the interval, so the day's accumulated
+progress toward a threshold resets. Staleness is keyed on a stable signature (sorted,
+order-independent) rather than raw goal-array equality — Supabase returns goal rows in
+arbitrary order, and an order-sensitive check would re-register on every foreground.
+
+**Amended 2026-11-23: count past activity, dedup side effects.** The reset was not
+acceptable: editing any goal mid-day handed the user a fresh full limit. Every event is now
+built with `includesPastActivity: true`, so a mid-day re-registration counts usage since
+midnight. That makes an already-passed threshold fire again immediately on re-registration,
+so the extension records each fired `"<eventName>@<thresholdSeconds>"` in
+`nudge.fired.<yyyy-MM-dd>` (`FiredEventStore`) and skips the notification, the trigger
+enqueue and the BG task when the key is already present that day. The threshold is part of
+the key by the user's choice: a raised limit notifies again at the new limit, a limit
+lowered below today's usage notifies once immediately, an unchanged limit never repeats.
+See `docs/specs/phase-1-devactivity.md` → "Counting past activity". The signature is still
+order-independent; re-registering is now cheap but not free (a burst of duplicate
+callbacks the dedup has to absorb).
 
 ### ADR-055: Never re-register monitoring from data that failed to load
 

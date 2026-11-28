@@ -68,6 +68,24 @@ Extends Supabase Auth with user-specific settings.
 | timeZone | varchar | IANA timezone string (e.g. `America/Denver`) |
 | settingsLocationLat | double precision | For location-based settings lock |
 | settingsLocationLon | double precision | For location-based settings lock |
+| onboardingCompleted | boolean | `onboarding_completed`, not null, default false (migration 009). Set to true by the app when the user finishes onboarding; never set back to false. Backfilled true for users who had both names. |
+
+#### `public.onboarding_status()` (migration 009)
+`returns jsonb`, `language sql`, `stable`, `security invoker`, `set search_path = ''`. Reads the
+caller's own profile via `auth.uid()` (RLS applies). Executable by `authenticated` only.
+
+```json
+{ "completed": true | false, "next_step": "profile" | null }
+```
+
+- `completed` = `profile.onboarding_completed` (false when the caller has no profile row).
+- `next_step` = the first **account** onboarding step not yet satisfied, in order; `null` when all
+  are satisfied. Today the only step is `"profile"` — satisfied when `first_name` and `last_name`
+  are both non-blank. New steps are added to this function, in order; a step added later does not
+  send users with `completed = true` back into onboarding.
+- The app keeps a per-user device copy of this (plus the names) and mirrors the `next_step` rule
+  on the device; see `docs/specs/onboarding-progress.md`. Device permissions (Screen Time,
+  notifications) are never stored.
 
 ### `app`
 Canonical app registry. Bundle ID is the primary key — no generated integer ID needed.
@@ -154,6 +172,8 @@ Stores the app user's contacts. Friends do not need a Supabase account or the ap
 
 **On `status`:** `pending` while awaiting consent reply; `accepted` once friend confirms; `blocked` for Twilio STOP opt-outs only. Friends who reply no are deleted outright — no row retained.
 
+**Realtime:** `friend` is in the `supabase_realtime` publication (migration `006c_realtime_friend.sql`). The app subscribes to INSERT + UPDATE filtered by `user_id=eq.<uid>` while the Friends list is on screen. Realtime enforces the existing "Users can read their own friend contacts" RLS select policy per subscriber, so no extra policy exists or is needed. DELETE is not subscribed (Realtime can't apply RLS to delete events); declines / deletions made elsewhere show on the next fetch. Default replica identity is kept: UPDATE events carry the full new row.
+
 ### `nudge`
 Tracks each SMS nudge sent to a friend and the friend's reply.
 
@@ -168,6 +188,8 @@ Tracks each SMS nudge sent to a friend and the friend's reply.
 | sentTimestamp | timestamptz | UTC — when the nudge was sent |
 
 **Note:** The app user is derivable via `friend.userId` — no separate receiver column is needed on `nudge`.
+
+**Realtime:** `nudge` is in the `supabase_realtime` publication (migration `006b_realtime_nudge.sql`). The app subscribes to INSERT + UPDATE filtered by `friend_id=eq.<id>` while a friend's history is open. Realtime enforces the existing RLS select policy per subscriber, so no extra policy exists or is needed. Default replica identity is kept: UPDATE events carry the full new row (all the app reads); `old_record` holds only the primary key.
 
 ---
 

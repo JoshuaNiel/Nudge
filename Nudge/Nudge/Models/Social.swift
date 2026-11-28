@@ -23,7 +23,7 @@ enum NudgeStatus: String, Codable {
 
 // MARK: - Friend
 
-struct Friend: Codable, Identifiable {
+struct Friend: Codable, Identifiable, Hashable {
     let id: Int
     let userId: UUID
     let friendName: String
@@ -38,6 +38,18 @@ struct Friend: Codable, Identifiable {
         case friendPhoneNumber    = "friend_phone_number"
         case status
         case invitationTimestamp  = "invitation_timestamp"
+    }
+
+    /// A copy with a new display name (a local rename, before the realtime echo arrives).
+    func renamed(to name: String) -> Friend {
+        Friend(
+            id: id,
+            userId: userId,
+            friendName: name,
+            friendPhoneNumber: friendPhoneNumber,
+            status: status,
+            invitationTimestamp: invitationTimestamp
+        )
     }
 }
 
@@ -57,7 +69,7 @@ struct FriendInsert: Encodable {
 
 // MARK: - Nudge
 
-struct Nudge: Codable, Identifiable {
+struct Nudge: Codable, Identifiable, Equatable {
     let id: Int
     let friendId: Int
     let prompt: String        // Full SMS sent to friend (report + options)

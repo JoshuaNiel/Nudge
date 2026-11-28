@@ -41,8 +41,10 @@ struct DashboardView: View {
     var body: some View {
         NavigationStack {
             content
+                .permissionBanners(for: .dashboard)
                 .navigationTitle("Dashboard")
                 .navigationBarTitleDisplayMode(.inline)
+                .mainTabHeader()
                 .toolbar {
                     if availability == .ready {
                         ToolbarItem(placement: .topBarTrailing) {
@@ -137,6 +139,7 @@ struct DashboardView: View {
 
 #Preview {
     DashboardView()
+        .environmentObject(PermissionStatusStore())
 }
 
 extension DashboardView {

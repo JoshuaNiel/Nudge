@@ -152,6 +152,15 @@ struct MonitoringPlanEventTests {
     @Test func emptySummariesProduceNoEvents() {
         #expect(MonitoringPlan.events(for: []).isEmpty)
     }
+
+    /// ADR-054 amendment: a mid-day re-registration must count usage since
+    /// midnight, or editing any goal hands the user a fresh full limit.
+    @Test func everyEventIncludesPastActivity() {
+        let events = MonitoringPlan.events(for: [goal("total", 7200), goal("session.timeout", 2700)])
+        #expect(events.count == 2)
+        #expect(events[DeviceActivityEvent.Name("total")]?.includesPastActivity == true)
+        #expect(events[DeviceActivityEvent.Name("session.timeout")]?.includesPastActivity == true)
+    }
 }
 
 // MARK: - shouldRegister
@@ -200,6 +209,34 @@ struct MonitoringPlanShouldRegisterTests {
     }
 }
 
+// MARK: - Screen Time revoke heuristic (device finding B)
+
+/// On device, revoking Screen Time in Settings clears every activity, but `startMonitoring`
+/// still succeeds and `AuthorizationCenter` keeps reporting approved. The only signal is that
+/// monitoring we registered earlier today is gone.
+@Suite("MonitoringPlan.activitiesLapsedSinceRegisteringToday")
+@MainActor
+struct MonitoringPlanLapseTests {
+
+    @Test func lapsedWhenRegisteredTodayAndNoActivities() {
+        #expect(MonitoringPlan.activitiesLapsedSinceRegisteringToday(
+            isMonitoringActive: false, lastDay: "2026-09-07", today: "2026-09-07"))
+    }
+
+    @Test func notLapsedWhileActivitiesExist() {
+        #expect(!MonitoringPlan.activitiesLapsedSinceRegisteringToday(
+            isMonitoringActive: true, lastDay: "2026-09-07", today: "2026-09-07"))
+    }
+
+    /// A new day (or a first install) with no activities is ordinary re-arming, not a revoke.
+    @Test func notLapsedOnAnotherDayOrWithoutStamp() {
+        #expect(!MonitoringPlan.activitiesLapsedSinceRegisteringToday(
+            isMonitoringActive: false, lastDay: "2026-09-06", today: "2026-09-07"))
+        #expect(!MonitoringPlan.activitiesLapsedSinceRegisteringToday(
+            isMonitoringActive: false, lastDay: nil, today: "2026-09-07"))
+    }
+}
+
 // MARK: - register (stamping + failure handling)
 
 @Suite("MonitoringPlan.register")
@@ -238,6 +275,69 @@ struct MonitoringPlanRegisterTests {
 
         #expect(stampDuringStart == "2026-09-08",
                 "stamp must already be visible to a re-entrant intervalDidStart")
+    }
+
+    /// With `includesPastActivity`, an already-passed threshold fires *during*
+    /// `startMonitoring`, and the extension matches it against the App Group goal
+    /// list — so the new list must already be there, or the nudge shows the old limit.
+    @Test func writesGoalListBeforeStartMonitoringRuns() throws {
+        let defaults = freshDefaults(#function)
+        defaults.set(
+            try JSONEncoder().encode([
+                GoalSummary(goalId: 1, eventName: "total", limitSeconds: 3600, targetLabel: "All Apps", appBundleId: nil)
+            ]),
+            forKey: AppGroupKeys.goalsActive
+        )
+        var limitsDuringStart: [String: Int] = [:]
+
+        _ = try MonitoringPlan.register(
+            summaries: summaries,
+            defaults: defaults,
+            now: utc(2026, 9, 8, 12, 0),
+            calendar: calendar("UTC")
+        ) { _, _ in
+            for summary in MonitoringPlan.loadSummaries(from: defaults) {
+                limitsDuringStart[summary.eventName] = summary.limitSeconds
+            }
+        }
+
+        #expect(limitsDuringStart == ["total": 7200, "session.timeout": 2700],
+                "the extension must see the new limits while startMonitoring runs")
+    }
+
+    @Test func restoresPreviousGoalListWhenStartMonitoringThrows() throws {
+        let defaults = freshDefaults(#function)
+        let previous = [
+            GoalSummary(goalId: 1, eventName: "total", limitSeconds: 3600, targetLabel: "All Apps", appBundleId: nil)
+        ]
+        let previousData = try JSONEncoder().encode(previous)
+        defaults.set(previousData, forKey: AppGroupKeys.goalsActive)
+
+        #expect(throws: Boom.self) {
+            _ = try MonitoringPlan.register(
+                summaries: summaries,
+                defaults: defaults,
+                now: utc(2026, 9, 8, 12, 0),
+                calendar: calendar("UTC")
+            ) { _, _ in throw Boom() }
+        }
+
+        #expect(defaults.data(forKey: AppGroupKeys.goalsActive) == previousData)
+    }
+
+    @Test func removesGoalListWhenFailingWithNoPreviousList() throws {
+        let defaults = freshDefaults(#function)
+
+        #expect(throws: Boom.self) {
+            _ = try MonitoringPlan.register(
+                summaries: summaries,
+                defaults: defaults,
+                now: utc(2026, 9, 8, 12, 0),
+                calendar: calendar("UTC")
+            ) { _, _ in throw Boom() }
+        }
+
+        #expect(defaults.object(forKey: AppGroupKeys.goalsActive) == nil)
     }
 
     @Test func writesGoalsAndSignatureOnSuccess() throws {
@@ -291,6 +391,60 @@ struct MonitoringPlanRegisterTests {
 
         #expect(defaults.string(forKey: AppGroupKeys.lastRegisteredDay) == nil)
         #expect(defaults.string(forKey: AppGroupKeys.lastRegisteredSignature) == nil)
+    }
+
+    /// `register` runs at least daily, so it is where old fired-event days are
+    /// cleaned up; today's record must survive so the dedup still holds.
+    @Test func prunesOldFiredKeysOnSuccess() throws {
+        let defaults = freshDefaults(#function)
+        let store = FiredEventStore(defaults: defaults)
+        store.markFired("total@7200", onDay: "2026-09-01")
+        store.markFired("total@7200", onDay: "2026-09-08")
+
+        _ = try MonitoringPlan.register(
+            summaries: summaries,
+            defaults: defaults,
+            now: utc(2026, 9, 8, 12, 0),
+            calendar: calendar("UTC")
+        ) { _, _ in }
+
+        #expect(defaults.object(forKey: AppGroupKeys.firedKey(day: "2026-09-01")) == nil)
+        #expect(store.hasFired("total@7200", onDay: "2026-09-08"))
+    }
+
+    /// The prune scans the whole App Group domain, so it runs at most once per local day.
+    @Test func prunesAtMostOncePerDay() throws {
+        let defaults = freshDefaults(#function)
+        let register = { (now: Date) in
+            _ = try MonitoringPlan.register(
+                summaries: self.summaries, defaults: defaults, now: now, calendar: calendar("UTC")
+            ) { _, _ in }
+        }
+        try register(utc(2026, 9, 8, 9, 0))
+        // An old record written after today's prune survives later same-day registrations.
+        FiredEventStore(defaults: defaults).markFired("total@7200", onDay: "2026-09-01")
+        try register(utc(2026, 9, 8, 15, 0))
+        #expect(defaults.object(forKey: AppGroupKeys.firedKey(day: "2026-09-01")) != nil)
+
+        // The next day prunes again.
+        try register(utc(2026, 9, 9, 9, 0))
+        #expect(defaults.object(forKey: AppGroupKeys.firedKey(day: "2026-09-01")) == nil)
+    }
+
+    @Test func doesNotPruneWhenStartMonitoringThrows() throws {
+        let defaults = freshDefaults(#function)
+        FiredEventStore(defaults: defaults).markFired("total@7200", onDay: "2026-09-01")
+
+        #expect(throws: Boom.self) {
+            _ = try MonitoringPlan.register(
+                summaries: summaries,
+                defaults: defaults,
+                now: utc(2026, 9, 8, 12, 0),
+                calendar: calendar("UTC")
+            ) { _, _ in throw Boom() }
+        }
+
+        #expect(defaults.object(forKey: AppGroupKeys.firedKey(day: "2026-09-01")) != nil)
     }
 
     /// Full day-rollover sequence: register, roll the clock forward, and confirm the

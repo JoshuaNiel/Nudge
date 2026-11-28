@@ -1,18 +1,33 @@
 import SwiftUI
 
-/// Drives the full onboarding sequence:
-/// feature tour → auth → profile setup → permissions → done
+/// Drives the signed-out part of onboarding: feature tour → auth (→ confirm email).
+///
+/// Once a session exists (from AuthView's own submit or from an email link), `RootView`
+/// replaces this view with the signed-in destination decided by `OnboardingRouting`
+/// (profile setup → permissions → app; docs/specs/onboarding-progress.md §4).
+///
+/// Starts at the tour by default. After an in-app account deletion ("Back to Sign In",
+/// account-deletion spec D) it starts at `.auth`, skipping the tour.
 struct OnboardingCoordinator: View {
-    @Binding var onboardingComplete: Bool
-    @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var authRecovery: AuthRecoveryCoordinator
 
-    @State private var step: Step = .tour
+    /// The step this coordinator was created at. Read once: later changes are ignored.
+    let initialStep: Step
+    @State private var step: Step
+    /// Email to prefill when returning to the sign-in form from the confirm-email screen.
+    @State private var authPrefillEmail = ""
 
-    private enum Step {
+    enum Step: Equatable {
         case tour
         case auth
-        case profileSetup
-        case permissions
+        /// Waiting for the emailed confirmation link (auth-recovery spec C5). Carries the
+        /// Resend credentials, which are dropped when the step changes.
+        case confirmEmail(PendingEmailConfirmation)
+    }
+
+    init(startingAt initialStep: Step = .tour) {
+        self.initialStep = initialStep
+        self._step = State(initialValue: initialStep)
     }
 
     var body: some View {
@@ -20,16 +35,28 @@ struct OnboardingCoordinator: View {
         case .tour:
             OnboardingTourView(onFinished: { step = .auth })
         case .auth:
-            AuthView(onAuthenticated: { step = .profileSetup })
-        case .profileSetup:
-            ProfileSetupView(onCompleted: { step = .permissions })
-        case .permissions:
-            PermissionsView(onCompleted: { onboardingComplete = true })
+            AuthView(
+                prefillEmail: authPrefillEmail,
+                // RootView moves on when the session is published.
+                onAuthenticated: {},
+                onConfirmationRequired: { pending in step = .confirmEmail(pending) },
+                onForgotPassword: { email in authRecovery.presentForgotPassword(prefillEmail: email) }
+            )
+        case .confirmEmail(let pending):
+            ConfirmEmailView(
+                pending: pending,
+                onAuthenticated: {},
+                onBackToSignIn: { email in
+                    authPrefillEmail = email
+                    step = .auth
+                }
+            )
         }
     }
 }
 
 #Preview {
-    OnboardingCoordinator(onboardingComplete: .constant(false))
+    OnboardingCoordinator()
         .environmentObject(AppState())
+        .environmentObject(AuthRecoveryCoordinator())
 }

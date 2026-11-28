@@ -36,6 +36,18 @@ The Supabase Swift client handles session persistence automatically via the keyc
 
 ---
 
+## Email Links (Password Reset + Sign-up Confirmation)
+
+Full spec: `docs/specs/auth-recovery.md`.
+
+- The client uses the **PKCE flow** (`flowType: .pkce`, pinned in `SupabaseClient.swift`). Email links redirect to the custom scheme `nudge://`, which another app could also register. Under PKCE the redirect only carries a one-time `code`. Turning that code into a session needs the code verifier this device stored when it requested the email, so an intercepted link is useless.
+- Redirect URLs: `nudge://reset-password` (`resetPasswordForEmail`) and `nudge://auth-callback` (`signUp`). The scheme is registered in `Nudge/Info.plist` (`CFBundleURLTypes`). The Supabase dashboard must allow `nudge://**` under Authentication → URL Configuration → Redirect URLs.
+- `NudgeApp.onOpenURL` → `AuthRecoveryCoordinator.handleOpenURL` → `AuthDeepLink` classifies the URL by host → `AuthService.establishSession(from:)` (`supabase.auth.session(from:)`). A recovery link then presents the Set New Password sheet above `RootView`. A failure shows "This link has expired. Request a new one."
+- Forgot-password never reveals whether an account exists. Every server response shows the same neutral message. The only exceptions are a rate limit and an offline/transport failure.
+- Links must be opened on the device that requested them, and only the most recent email's link works (single stored verifier).
+
+---
+
 ## Onboarding Flow
 
 Sign-up leads into a linear onboarding sequence before reaching the main app:
@@ -121,8 +133,25 @@ create policy "Users can manage their own rows"
 
 ---
 
+## Account Deletion
+
+Settings → **Delete Account** (bottom section) → confirmation alert → the app calls the
+`delete-account` Edge Function with the user's JWT (POST, no body). The function validates the
+caller with `auth.getUser(jwt)` and hard-deletes only that user via `auth.admin.deleteUser`;
+every user-owned table cascades from `auth.users` (audit in `docs/specs/account-deletion.md`).
+
+Only after a 2xx does the app clean up locally (`AccountCleanupService`): stop all
+DeviceActivity monitoring → wipe the App Group suite → reset `onboardingComplete` →
+`signOut(scope: .local)`, which emits `.signedOut` and returns the user to onboarding. On
+failure nothing local changes. Full details: `docs/specs/account-deletion.md`.
+
+Still open: revoking the Sign in with Apple token on deletion (SIWA isn't configured on the
+backend yet — tracked in the spec's backlog notes).
+
+---
+
 ## Open Questions
 
 > TODO: Answer before submission:
-> - What is the account deletion flow? (Required for App Store — must delete all user data from Supabase and revoke Apple token)
+> - Sign in with Apple token revocation on account deletion (deletion itself is implemented — see above)
 > - Privacy nutrition label — document all data collected and how it is used

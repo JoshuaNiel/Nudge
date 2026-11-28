@@ -1,16 +1,40 @@
 import SwiftUI
-import UserNotifications
-import FamilyControls
 
+/// Asks for the device permissions that were never asked on this device, one page each
+/// (docs/specs/onboarding-progress.md §4, §5b). Shown at most once per device: whatever the
+/// user does on a page (Allow, Deny, Skip for now) moves past it, and once nothing is left the
+/// screen calls `onFinished`.
 struct PermissionsView: View {
-    var onCompleted: () -> Void
+    /// Never-asked permissions, in order.
+    let pending: [DevicePermission]
+    /// Shows the system prompt; returns when the user has answered.
+    var onRequest: (DevicePermission) async -> Void
+    var onFinished: () -> Void
 
-    @State private var step: Step = .screenTime
+    @State private var isRequesting = false
+    /// Pages already answered or skipped on this screen. Screen-local: the page is never shown
+    /// again on this device, so nothing needs remembering beyond it.
+    @State private var dismissed: Set<DevicePermission> = []
 
-    private enum Step { case screenTime, notifications }
+    /// The first pending permission not yet answered or skipped here; `nil` when done.
+    static func currentPage(pending: [DevicePermission], dismissed: Set<DevicePermission>) -> DevicePermission? {
+        pending.first { !dismissed.contains($0) }
+    }
 
     var body: some View {
-        switch step {
+        if let permission = Self.currentPage(pending: pending, dismissed: dismissed) {
+            page(for: permission)
+                .id(permission)
+        } else {
+            // Nothing left to ask (or nothing was ever pending): finish.
+            Color.clear
+                .onAppear(perform: onFinished)
+        }
+    }
+
+    @ViewBuilder
+    private func page(for permission: DevicePermission) -> some View {
+        switch permission {
         case .screenTime:
             PermissionPageView(
                 icon: "hourglass",
@@ -19,8 +43,9 @@ struct PermissionsView: View {
                 primaryLabel: "Enable Screen Time",
                 skipLabel: "Skip for now",
                 warning: "You can enable this later in Settings, but the app won't track usage until you do.",
-                onPrimary: requestScreenTime,
-                onSkip: { step = .notifications }
+                isLoading: isRequesting,
+                onPrimary: { request(.screenTime) },
+                onSkip: { skip(.screenTime) }
             )
         case .notifications:
             PermissionPageView(
@@ -30,36 +55,36 @@ struct PermissionsView: View {
                 primaryLabel: "Enable Notifications",
                 skipLabel: "Skip for now",
                 warning: nil,
-                onPrimary: requestNotifications,
-                onSkip: onCompleted
+                isLoading: isRequesting,
+                onPrimary: { request(.notifications) },
+                onSkip: { skip(.notifications) }
             )
-        }
-    }
-
-    private func requestScreenTime() {
-        Task {
-            do {
-                try await AuthorizationCenter.shared.requestAuthorization(for: .individual)
-                await MainActor.run { step = .notifications }
-            } catch {
-                // Authorization denied or failed — advance anyway so the user isn't blocked.
-                // Monitoring-dependent features will show a graceful degraded state.
-                await MainActor.run { step = .notifications }
-            }
-        }
-    }
-
-    private func requestNotifications() {
-        Task {
-            let center = UNUserNotificationCenter.current()
-            _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
-            await MainActor.run { onCompleted() }
         }
     }
 }
 
 #Preview("Screen Time Step") {
-    PermissionsView(onCompleted: {})
+    PermissionsView(pending: [.screenTime, .notifications], onRequest: { _ in }, onFinished: {})
+}
+
+extension PermissionsView {
+    // MARK: - Actions
+
+    private func request(_ permission: DevicePermission) {
+        guard !isRequesting else { return }
+        isRequesting = true
+        Task {
+            defer { isRequesting = false }
+            await onRequest(permission)
+            // Answered (or the request failed without an answer): either way, move on so the
+            // screen can't get stuck on this page.
+            dismissed.insert(permission)
+        }
+    }
+
+    private func skip(_ permission: DevicePermission) {
+        dismissed.insert(permission)
+    }
 }
 
 private struct PermissionPageView: View {
@@ -69,6 +94,7 @@ private struct PermissionPageView: View {
     let primaryLabel: String
     let skipLabel: String
     let warning: String?
+    let isLoading: Bool
     let onPrimary: () -> Void
     let onSkip: () -> Void
 
@@ -105,20 +131,28 @@ private struct PermissionPageView: View {
 
             VStack(spacing: 12) {
                 Button(action: onPrimary) {
-                    Text(primaryLabel)
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.accentColor)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                    Group {
+                        if isLoading {
+                            ProgressView()
+                        } else {
+                            Text(primaryLabel)
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.accentColor)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
+                .disabled(isLoading)
 
                 Button(action: onSkip) {
                     Text(skipLabel)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
+                .disabled(isLoading)
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 40)

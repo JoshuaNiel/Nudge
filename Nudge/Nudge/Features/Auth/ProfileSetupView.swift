@@ -1,14 +1,26 @@
 import SwiftUI
 
+/// Collects the user's name. Saving goes through the onboarding device copy + outbox
+/// (works offline); routing advances as soon as the copy has both names.
 struct ProfileSetupView: View {
-    var onCompleted: () -> Void
+    /// Called with the untrimmed names; the receiver trims and saves.
+    var onSave: (_ firstName: String, _ lastName: String) -> Void
 
-    @EnvironmentObject private var appState: AppState
+    @State private var firstName: String
+    @State private var lastName: String
 
-    @State private var firstName = ""
-    @State private var lastName = ""
-    @State private var isLoading = false
-    @State private var errorMessage: String? = nil
+    init(initialFirstName: String? = nil, initialLastName: String? = nil,
+         onSave: @escaping (_ firstName: String, _ lastName: String) -> Void) {
+        self.onSave = onSave
+        self._firstName = State(initialValue: initialFirstName ?? "")
+        self._lastName = State(initialValue: initialLastName ?? "")
+    }
+
+    /// Both names must be non-blank (the server enforces the same, migration 004).
+    private var isDisabled: Bool {
+        firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 28) {
@@ -27,63 +39,41 @@ struct ProfileSetupView: View {
             VStack(spacing: 12) {
                 TextField("First name", text: $firstName)
                     .textContentType(.givenName)
-                    .textFieldStyle(.roundedBorder)
+                    .inputFieldBox()
 
                 TextField("Last name", text: $lastName)
                     .textContentType(.familyName)
-                    .textFieldStyle(.roundedBorder)
+                    .inputFieldBox()
             }
             .padding(.horizontal, 24)
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-            }
 
             Spacer()
 
             Button(action: save) {
-                Group {
-                    if isLoading {
-                        ProgressView()
-                    } else {
-                        Text("Continue")
-                            .fontWeight(.semibold)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(firstName.isEmpty || lastName.isEmpty ? Color.secondary : Color.accentColor)
-                .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                Text("Continue")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(isDisabled ? Color.secondary : Color.accentColor)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
             }
-            .disabled(firstName.isEmpty || lastName.isEmpty || isLoading)
+            .disabled(isDisabled)
             .padding(.horizontal, 24)
             .padding(.bottom, 40)
-        }
-    }
-
-    private func save() {
-        isLoading = true
-        Task {
-            defer { isLoading = false }
-            do {
-                try await appState.authService.updateProfile(
-                    firstName: firstName.trimmingCharacters(in: .whitespaces),
-                    lastName: lastName.trimmingCharacters(in: .whitespaces)
-                )
-                onCompleted()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
         }
     }
 }
 
 #Preview {
-    ProfileSetupView(onCompleted: {})
-        .environmentObject(AppState())
+    ProfileSetupView(onSave: { _, _ in })
+}
+
+extension ProfileSetupView {
+    // MARK: - Actions
+
+    private func save() {
+        guard !isDisabled else { return }
+        onSave(firstName, lastName)
+    }
 }

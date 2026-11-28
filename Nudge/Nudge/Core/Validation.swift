@@ -22,3 +22,59 @@ extension String {
         return nil
     }
 }
+
+extension String {
+    /// Pragmatic email format check (`local@domain.tld`, TLD ≥ 2 letters).
+    ///
+    /// This only catches typos before a network call; Supabase is the authority
+    /// on what it accepts. Does not trim — callers trim at submit time.
+    var isValidEmail: Bool {
+        let pattern = #"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}$"#
+        return range(of: pattern, options: .regularExpression) != nil
+    }
+}
+
+/// Client-side rules for choosing a new password.
+enum PasswordRules {
+    static let minimumLength = 8
+
+    static let tooShortMessage = "Password must be at least \(minimumLength) characters."
+    static let mismatchMessage = "Passwords do not match."
+
+    /// The first rule `password` breaks, or `nil` if it is acceptable.
+    /// Length is checked before the match so the user fixes one thing at a time.
+    /// Passwords are never trimmed — whitespace is a legitimate character.
+    static func validationError(password: String, confirmation: String) -> String? {
+        if password.count < minimumLength { return tooShortMessage }
+        if password != confirmation { return mismatchMessage }
+        return nil
+    }
+}
+
+// MARK: - Friend name
+
+extension String {
+    /// `friend.friend_name` is `varchar(100)` with a non-blank check.
+    static let friendNameMaxLength = 100
+
+    /// The name as it is stored: surrounding whitespace and newlines removed.
+    var trimmedFriendName: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// True when the trimmed name is non-blank and fits the column.
+    var isValidFriendName: Bool { friendNameValidationError == nil }
+
+    /// Why the name can't be saved, or nil if it can. Checked after trimming.
+    ///
+    /// Length is counted in Unicode scalars, the unit Postgres uses for `varchar(n)` in UTF-8,
+    /// so a name accepted here is never rejected by the column.
+    var friendNameValidationError: String? {
+        let name = trimmedFriendName
+        if name.isEmpty { return "Name can't be empty." }
+        if name.unicodeScalars.count > Self.friendNameMaxLength {
+            return "Name must be \(Self.friendNameMaxLength) characters or fewer."
+        }
+        return nil
+    }
+}
