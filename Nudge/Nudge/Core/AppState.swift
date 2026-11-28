@@ -62,7 +62,8 @@ class AppState: ObservableObject {
                 // in the implicit flow; the PKCE flow never emits it). It must not
                 // be treated as a sign-out. Recovery UI is driven by the deep-link
                 // route in AuthRecoveryCoordinator, not by this event.
-                currentUser = session?.user
+                // Republish only if the user record changed (see fetchAndCacheProfile).
+                if currentUser != session?.user { currentUser = session?.user }
                 if let session {
                     writeSecretsToAppGroup(session: session)
                 }
@@ -145,10 +146,15 @@ class AppState: ObservableObject {
             .execute()
             .value else { return false }
 
+        // Assign only real changes: every @Published write sends objectWillChange,
+        // re-rendering every view that observes AppState (the whole app), even when the
+        // value is the same — and this runs on every sign-in and foreground.
         let name = row.firstName ?? ""
-        userFirstName = name
-        sessionTimeoutMinutes = row.sessionTimeoutMinutes
-        if let tzId = row.timeZone, let tz = TimeZone(identifier: tzId) {
+        if userFirstName != name { userFirstName = name }
+        if sessionTimeoutMinutes != row.sessionTimeoutMinutes {
+            sessionTimeoutMinutes = row.sessionTimeoutMinutes
+        }
+        if let tzId = row.timeZone, let tz = TimeZone(identifier: tzId), timeZone != tz {
             timeZone = tz
         }
         UserDefaults(suiteName: AppGroupKeys.suiteName)?.set(name, forKey: AppGroupKeys.userFirstName)

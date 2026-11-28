@@ -42,15 +42,16 @@ struct AuthView: View {
                     TextField("Email", text: $viewModel.email)
                         .textContentType(.emailAddress)
                         .keyboardType(.emailAddress)
-                        .autocapitalization(.none)
-                        .textFieldStyle(.roundedBorder)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .inputFieldBox()
 
                     PasswordField(
                         "Password",
                         text: $viewModel.password,
                         textContentType: viewModel.mode == .signIn ? .password : .newPassword
                     )
-                    .textFieldStyle(.roundedBorder)
+                    .inputFieldBox()
 
                     if viewModel.mode == .signUp {
                         PasswordField(
@@ -58,7 +59,7 @@ struct AuthView: View {
                             text: $viewModel.confirmPassword,
                             textContentType: .newPassword
                         )
-                        .textFieldStyle(.roundedBorder)
+                        .inputFieldBox()
                     }
 
                     if viewModel.mode == .signIn {

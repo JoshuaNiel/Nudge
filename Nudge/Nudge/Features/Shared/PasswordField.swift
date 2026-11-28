@@ -27,23 +27,41 @@ struct PasswordVisibility: Equatable {
         toggle()
         return focused == nil ? nil : activeVariant
     }
+
+    /// Only the visible input may write the shared text. Both inputs are bound to the
+    /// same value, so the hidden one is refreshed during every view update; a write-back
+    /// from it would publish from inside that update.
+    func acceptsEdit(from variant: Variant) -> Bool {
+        variant == activeVariant
+    }
+
+    /// Where focus goes when the field appears.
+    func initialFocus(focusOnAppear: Bool) -> Variant? {
+        focusOnAppear ? activeVariant : nil
+    }
 }
 
-/// A password input with a trailing eye button that switches between a `SecureField`
-/// (hidden) and a `TextField` (shown). iOS clears a `SecureField` when the user returns
-/// to it and types; revealing lets them keep editing instead.
+/// A password input with an eye button that switches between a `SecureField` (hidden)
+/// and a `TextField` (shown). iOS clears a `SecureField` when the user returns to it and
+/// types; revealing lets them keep editing instead.
 ///
 /// Both inputs stay mounted in a `ZStack` and only the active one is visible, so focus
 /// can be handed from one to the other when toggling (removing the focused view would
-/// drop the keyboard). Apply `.textFieldStyle`, `.submitLabel` and `.onSubmit` to this
-/// view as you would to a `SecureField`; they reach both inputs through the environment.
+/// drop the keyboard). Apply `.submitLabel` and `.onSubmit` to this view as you would to a
+/// `SecureField`; they reach both inputs through the environment.
+///
+/// The view draws no border. Standalone, apply `.inputFieldBox()` so the eye sits inside
+/// the same box as the other fields; in a `Form` row, use it as is.
+///
+/// Focus lives in one place, this view's own `@FocusState`. There is deliberately no
+/// external `FocusState` binding: mirroring two focus states with `onChange` in both
+/// directions writes focus from inside a focus update, which SwiftUI reports as an
+/// AttributeGraph cycle. Parents that want the keyboard up on appear pass `focusOnAppear`.
 struct PasswordField: View {
     let title: String
     @Binding var text: String
     let textContentType: UITextContentType
-    /// Optional external focus, for parents that focus the field programmatically.
-    /// A `.focused` modifier on this container would not reach the inner inputs.
-    var focused: FocusState<Bool>.Binding?
+    let focusOnAppear: Bool
 
     @State private var visibility = PasswordVisibility()
     @FocusState private var focusedVariant: PasswordVisibility.Variant?
@@ -52,23 +70,23 @@ struct PasswordField: View {
         _ title: String,
         text: Binding<String>,
         textContentType: UITextContentType,
-        focused: FocusState<Bool>.Binding? = nil
+        focusOnAppear: Bool = false
     ) {
         self.title = title
         self._text = text
         self.textContentType = textContentType
-        self.focused = focused
+        self.focusOnAppear = focusOnAppear
     }
 
     var body: some View {
         HStack(spacing: 8) {
             ZStack {
-                SecureField(title, text: $text)
+                SecureField(title, text: input(for: .secure))
                     .configured(for: .secure, active: visibility.activeVariant,
                                 contentType: textContentType)
                     .focused($focusedVariant, equals: .secure)
 
-                TextField(title, text: $text)
+                TextField(title, text: input(for: .plain))
                     .configured(for: .plain, active: visibility.activeVariant,
                                 contentType: textContentType)
                     .focused($focusedVariant, equals: .plain)
@@ -83,23 +101,22 @@ struct PasswordField: View {
             .buttonStyle(.borderless)
             .accessibilityLabel(visibility.toggleAccessibilityLabel)
         }
-        .onChange(of: focused?.wrappedValue) { _, isFocused in
-            guard let isFocused else { return }
-            if isFocused, focusedVariant == nil {
-                focusedVariant = visibility.activeVariant
-            } else if !isFocused, focusedVariant != nil {
-                focusedVariant = nil
-            }
-        }
-        .onChange(of: focusedVariant) { _, variant in
-            let isFocused = variant != nil
-            if let focused, focused.wrappedValue != isFocused {
-                focused.wrappedValue = isFocused
-            }
-        }
         .onAppear {
-            if focused?.wrappedValue == true { focusedVariant = visibility.activeVariant }
+            if let variant = visibility.initialFocus(focusOnAppear: focusOnAppear) {
+                focusedVariant = variant
+            }
         }
+    }
+
+    /// The shared text, writable only through the visible input.
+    private func input(for variant: PasswordVisibility.Variant) -> Binding<String> {
+        Binding(
+            get: { text },
+            set: { newValue in
+                guard visibility.acceptsEdit(from: variant), newValue != text else { return }
+                text = newValue
+            }
+        )
     }
 
     private func toggleVisibility() {
@@ -131,8 +148,9 @@ private extension View {
     @Previewable @State var confirm = ""
     VStack(spacing: 12) {
         PasswordField("Password", text: $password, textContentType: .newPassword)
+            .inputFieldBox()
         PasswordField("Confirm password", text: $confirm, textContentType: .newPassword)
+            .inputFieldBox()
     }
-    .textFieldStyle(.roundedBorder)
     .padding(.horizontal, 24)
 }

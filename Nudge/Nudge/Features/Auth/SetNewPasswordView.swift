@@ -53,7 +53,7 @@ struct SetNewPasswordView: View {
                         text: $viewModel.newPassword,
                         textContentType: .newPassword
                     )
-                    .textFieldStyle(.roundedBorder)
+                    .inputFieldBox()
 
                     PasswordField(
                         "Confirm new password",
@@ -62,7 +62,7 @@ struct SetNewPasswordView: View {
                     )
                     .submitLabel(.done)
                     .onSubmit(submit)
-                    .textFieldStyle(.roundedBorder)
+                    .inputFieldBox()
                 }
                 .padding(.horizontal, 24)
 

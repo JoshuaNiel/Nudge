@@ -40,7 +40,7 @@ struct ForgotPasswordView: View {
                             .submitLabel(.send)
                             .focused($isEmailFocused)
                             .onSubmit(submit)
-                            .textFieldStyle(.roundedBorder)
+                            .inputFieldBox()
 
                         if let validationError = viewModel.validationError {
                             Text(validationError)

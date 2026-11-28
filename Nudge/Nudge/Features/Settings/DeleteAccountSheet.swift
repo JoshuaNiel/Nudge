@@ -6,7 +6,6 @@ import SwiftUI
 struct DeleteAccountSheet: View {
     @ObservedObject var viewModel: AccountDeletionViewModel
     @EnvironmentObject private var appState: AppState
-    @FocusState private var passwordFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -20,7 +19,7 @@ struct DeleteAccountSheet: View {
                         "Password",
                         text: $viewModel.password,
                         textContentType: .password,
-                        focused: $passwordFocused
+                        focusOnAppear: true
                     )
                 } header: {
                     Text("Enter your password to confirm")
@@ -59,7 +58,6 @@ struct DeleteAccountSheet: View {
                     .disabled(viewModel.isDeleting)
                 }
             }
-            .onAppear { passwordFocused = true }
         }
         .interactiveDismissDisabled(viewModel.isDeleting)
     }

@@ -179,7 +179,10 @@ final class ConfirmEmailViewModel: ObservableObject {
 
     private func startCountdown() {
         countdownEndsAt = clock.now.addingTimeInterval(TimeInterval(Self.countdownSeconds))
-        secondsRemaining = Self.countdownSeconds
+        // Skip the no-op write on first appear (already 30): it would still publish.
+        if secondsRemaining != Self.countdownSeconds {
+            secondsRemaining = Self.countdownSeconds
+        }
         ticker = clock.ticks { [weak self] in self?.updateRemaining() }
     }
 

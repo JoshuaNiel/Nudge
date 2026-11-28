@@ -59,4 +59,29 @@ struct PasswordVisibilityTests {
         #expect(visibility.toggle(focused: nil) == nil)
         #expect(visibility.isRevealed)
     }
+
+    // MARK: Hidden input never writes (no publishing from inside a view update)
+
+    @Test func onlyTheVisibleInputAcceptsEdits() {
+        var visibility = PasswordVisibility()
+        #expect(visibility.acceptsEdit(from: .secure))
+        #expect(visibility.acceptsEdit(from: .plain) == false)
+        visibility.toggle()
+        #expect(visibility.acceptsEdit(from: .plain))
+        #expect(visibility.acceptsEdit(from: .secure) == false)
+    }
+
+    // MARK: Focus on appear (replaces the two-way FocusState sync)
+
+    @Test func focusOnAppearTargetsTheActiveInput() {
+        var visibility = PasswordVisibility()
+        #expect(visibility.initialFocus(focusOnAppear: true) == .secure)
+        visibility.toggle()
+        #expect(visibility.initialFocus(focusOnAppear: true) == .plain)
+    }
+
+    @Test func noFocusOnAppearByDefault() {
+        let visibility = PasswordVisibility()
+        #expect(visibility.initialFocus(focusOnAppear: false) == nil)
+    }
 }
