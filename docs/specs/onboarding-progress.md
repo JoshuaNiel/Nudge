@@ -135,6 +135,46 @@ re-checked on every real foreground and after returning from Settings.
 
 ---
 
+## 5b. Ask once, then banners and in-context asks (user decisions 2026-11-27)
+
+Supersedes the "Skip for now" handling and the banner actions above, where they differ.
+
+- **The full-screen permissions page appears at most once per device.** Reaching it records a
+  device-local `permissionsPageShown = true` (standard `UserDefaults`, not per user, never
+  synced). Whatever the user does there (Allow, Deny, Skip for now) finishes it. Routing never
+  shows it again on this device, even if a permission is still `notDetermined`. A reinstall or
+  new device counts as new. Remove the session-only "skipped" set.
+- **Existing devices after this update:** if `permissionsPageShown` is missing but the legacy
+  onboarding flag was true, or the device copy says completed, treat the page as already shown.
+  Don't show it to existing users.
+- **Banner and sheet actions:**
+  - **Screen Time:** always calls `AuthorizationCenter.requestAuthorization(for: .individual)`
+    (the system prompt), whatever the current status. Never opens Settings.
+  - **Notifications:** if `notDetermined` → system prompt (button "Turn On"). If denied → the
+    button reads **"Open Settings"** and opens the app's notification settings
+    (`UIApplication.openNotificationSettingsURLString`). iOS can't re-prompt after a denial.
+- **In-context asks on the Goals tab:**
+  - Tapping **+ (Add goal)** without Screen Time approved → a small sheet: "Nudge needs Screen
+    Time access to track goals." **Allow** (system prompt; on approval the add-goal flow
+    continues) / **Not now** (closes; the add-goal flow does not open, because goals can't work
+    without Screen Time).
+  - **Saving a goal** while notifications are not authorized → after the save succeeds, a sheet:
+    "Turn on notifications so Nudge can alert you when you hit this limit." **Turn On** /
+    **Open Settings** (per status above) / **Not now**. The goal is saved either way.
+  - "Not now" is never remembered. The ask appears again on the next attempt.
+- **Note:** PR #22 later replaces the Goals UI. Its add/save entry points must carry these asks
+  forward when it is merged.
+- **Done when (5b):**
+  - Unit tests:
+    - the page is shown once (flag set on reaching it; never again even with notDetermined);
+    - existing-user inference;
+    - the banner/sheet action choice per status (Screen Time always prompts; notifications
+      prompt vs. Open Settings);
+    - the add-goal gate (blocked without Screen Time, continues on approval);
+    - the post-save notification ask.
+  - On device: Skip on the page → never shown again; tapping + without Screen Time → sheet →
+    prompt; saving a goal with notifications denied → sheet with Open Settings.
+
 ## 6. Edge cases
 - **Sign-in on a device with someone else's queued writes:** those stay queued and untouched.
 - **The server rejects the name** (e.g. a non-blank check): the write is dropped and logged. On
