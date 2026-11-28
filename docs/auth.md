@@ -36,6 +36,18 @@ The Supabase Swift client handles session persistence automatically via the keyc
 
 ---
 
+## Email Links (Password Reset + Sign-up Confirmation)
+
+Full spec: `docs/specs/auth-recovery.md`.
+
+- The client uses the **PKCE flow** (`flowType: .pkce`, pinned in `SupabaseClient.swift`). Email links redirect to the custom scheme `nudge://`, which another app could also register. Under PKCE the redirect only carries a one-time `code`. Turning that code into a session needs the code verifier this device stored when it requested the email, so an intercepted link is useless.
+- Redirect URLs: `nudge://reset-password` (`resetPasswordForEmail`) and `nudge://auth-callback` (`signUp`). The scheme is registered in `Nudge/Info.plist` (`CFBundleURLTypes`). The Supabase dashboard must allow `nudge://**` under Authentication → URL Configuration → Redirect URLs.
+- `NudgeApp.onOpenURL` → `AuthRecoveryCoordinator.handleOpenURL` → `AuthDeepLink` classifies the URL by host → `AuthService.establishSession(from:)` (`supabase.auth.session(from:)`). A recovery link then presents the Set New Password sheet above `RootView`. A failure shows "This link has expired. Request a new one."
+- Forgot-password never reveals whether an account exists. Every server response shows the same neutral message. The only exceptions are a rate limit and an offline/transport failure.
+- Links must be opened on the device that requested them, and only the most recent email's link works (single stored verifier).
+
+---
+
 ## Onboarding Flow
 
 Sign-up leads into a linear onboarding sequence before reaching the main app:

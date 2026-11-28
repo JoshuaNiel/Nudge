@@ -27,11 +27,11 @@ struct ProfileSetupView: View {
             VStack(spacing: 12) {
                 TextField("First name", text: $firstName)
                     .textContentType(.givenName)
-                    .textFieldStyle(.roundedBorder)
+                    .inputFieldBox()
 
                 TextField("Last name", text: $lastName)
                     .textContentType(.familyName)
-                    .textFieldStyle(.roundedBorder)
+                    .inputFieldBox()
             }
             .padding(.horizontal, 24)
 

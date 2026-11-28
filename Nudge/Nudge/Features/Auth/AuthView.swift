@@ -3,17 +3,25 @@ import AuthenticationServices
 
 struct AuthView: View {
     var onAuthenticated: () -> Void
+    /// Sign-up awaits email confirmation, or sign-in was refused as unconfirmed:
+    /// show the confirm-email screen.
+    var onConfirmationRequired: (PendingEmailConfirmation) -> Void
+    /// Opens the reset-password sheet, pre-filled with whatever email is typed.
+    var onForgotPassword: (String) -> Void
 
-    @EnvironmentObject private var appState: AppState
+    @StateObject private var viewModel: AuthViewModel
 
-    @State private var mode: Mode = .signIn
-    @State private var email = ""
-    @State private var password = ""
-    @State private var confirmPassword = ""
-    @State private var isLoading = false
-    @State private var errorMessage: String? = nil
-
-    private enum Mode { case signIn, signUp }
+    init(
+        prefillEmail: String = "",
+        onAuthenticated: @escaping () -> Void,
+        onConfirmationRequired: @escaping (PendingEmailConfirmation) -> Void,
+        onForgotPassword: @escaping (String) -> Void
+    ) {
+        self.onAuthenticated = onAuthenticated
+        self.onConfirmationRequired = onConfirmationRequired
+        self.onForgotPassword = onForgotPassword
+        _viewModel = StateObject(wrappedValue: AuthViewModel(prefillEmail: prefillEmail))
+    }
 
     var body: some View {
         ScrollView {
@@ -23,7 +31,7 @@ struct AuthView: View {
                     Text("Nudge")
                         .font(.largeTitle)
                         .fontWeight(.bold)
-                    Text(mode == .signIn ? "Welcome back" : "Create your account")
+                    Text(viewModel.mode == .signIn ? "Welcome back" : "Create your account")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -31,26 +39,40 @@ struct AuthView: View {
 
                 // Email/password fields
                 VStack(spacing: 12) {
-                    TextField("Email", text: $email)
+                    TextField("Email", text: $viewModel.email)
                         .textContentType(.emailAddress)
                         .keyboardType(.emailAddress)
-                        .autocapitalization(.none)
-                        .textFieldStyle(.roundedBorder)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .inputFieldBox()
 
-                    SecureField("Password", text: $password)
-                        .textContentType(mode == .signIn ? .password : .newPassword)
-                        .textFieldStyle(.roundedBorder)
+                    PasswordField(
+                        "Password",
+                        text: $viewModel.password,
+                        textContentType: viewModel.mode == .signIn ? .password : .newPassword
+                    )
+                    .inputFieldBox()
 
-                    if mode == .signUp {
-                        SecureField("Confirm password", text: $confirmPassword)
-                            .textContentType(.newPassword)
-                            .textFieldStyle(.roundedBorder)
+                    if viewModel.mode == .signUp {
+                        PasswordField(
+                            "Confirm password",
+                            text: $viewModel.confirmPassword,
+                            textContentType: .newPassword
+                        )
+                        .inputFieldBox()
+                    }
+
+                    if viewModel.mode == .signIn {
+                        Button("Forgot password?", action: forgotPassword)
+                            .font(.footnote)
+                            .foregroundStyle(Color.accentColor)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                 }
                 .padding(.horizontal, 24)
 
                 // Error
-                if let errorMessage {
+                if let errorMessage = viewModel.errorMessage {
                     Text(errorMessage)
                         .font(.footnote)
                         .foregroundStyle(.red)
@@ -61,10 +83,10 @@ struct AuthView: View {
                 // Primary action
                 Button(action: submitEmailPassword) {
                     Group {
-                        if isLoading {
+                        if viewModel.isLoading {
                             ProgressView()
                         } else {
-                            Text(mode == .signIn ? "Sign In" : "Sign Up")
+                            Text(viewModel.mode == .signIn ? "Sign In" : "Sign Up")
                                 .fontWeight(.semibold)
                         }
                     }
@@ -74,7 +96,7 @@ struct AuthView: View {
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
-                .disabled(isLoading)
+                .disabled(viewModel.isLoading)
                 .padding(.horizontal, 24)
 
                 // Divider
@@ -87,7 +109,7 @@ struct AuthView: View {
 
                 // Sign in with Apple
                 SignInWithAppleButton(
-                    mode == .signIn ? .signIn : .signUp,
+                    viewModel.mode == .signIn ? .signIn : .signUp,
                     onRequest: configureAppleRequest,
                     onCompletion: handleAppleCompletion
                 )
@@ -98,7 +120,7 @@ struct AuthView: View {
 
                 // Toggle mode
                 Button(action: toggleMode) {
-                    Text(mode == .signIn
+                    Text(viewModel.mode == .signIn
                          ? "Don't have an account? Sign up"
                          : "Already have an account? Sign in")
                         .font(.footnote)
@@ -112,48 +134,21 @@ struct AuthView: View {
     // MARK: - Previews
 }
 
-#Preview("Sign In") {
-    AuthView(onAuthenticated: {})
-        .environmentObject(AppState())
-}
-
-#Preview("Sign Up") {
-    AuthView(onAuthenticated: {})
-        .environmentObject(AppState())
+#Preview {
+    AuthView(onAuthenticated: {}, onConfirmationRequired: { _ in }, onForgotPassword: { _ in })
 }
 
 extension AuthView {
     // MARK: - Email/Password
 
     private func submitEmailPassword() {
-        errorMessage = nil
-        guard validate() else { return }
-        isLoading = true
         Task {
-            defer { isLoading = false }
-            do {
-                if mode == .signIn {
-                    try await appState.authService.signIn(email: email, password: password)
-                } else {
-                    try await appState.authService.signUp(email: email, password: password)
-                }
-                onAuthenticated()
-            } catch {
-                errorMessage = error.localizedDescription
+            switch await viewModel.submit() {
+            case .signedIn: onAuthenticated()
+            case .needsEmailConfirmation(let pending): onConfirmationRequired(pending)
+            case .failed: break
             }
         }
-    }
-
-    private func validate() -> Bool {
-        guard !email.isEmpty, !password.isEmpty else {
-            errorMessage = "Please fill in all fields."
-            return false
-        }
-        if mode == .signUp, password != confirmPassword {
-            errorMessage = "Passwords do not match."
-            return false
-        }
-        return true
     }
 
     // MARK: - Sign in with Apple
@@ -166,33 +161,21 @@ extension AuthView {
         switch result {
         case .success(let auth):
             guard let credential = auth.credential as? ASAuthorizationAppleIDCredential else { return }
-            isLoading = true
             Task {
-                defer { isLoading = false }
-                do {
-                    try await appState.authService.signInWithApple(credential: credential)
-                    onAuthenticated()
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
+                if await viewModel.signInWithApple(credential: credential) { onAuthenticated() }
             }
         case .failure(let error):
-            // ASAuthorizationError.canceled is not a real error — user dismissed the sheet
-            let nsError = error as NSError
-            if nsError.code != ASAuthorizationError.canceled.rawValue {
-                errorMessage = error.localizedDescription
-            }
+            viewModel.appleAuthorizationFailed(error)
         }
     }
 
     // MARK: - Helpers
 
+    private func forgotPassword() {
+        onForgotPassword(viewModel.email.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     private func toggleMode() {
-        withAnimation {
-            mode = mode == .signIn ? .signUp : .signIn
-            errorMessage = nil
-            password = ""
-            confirmPassword = ""
-        }
+        withAnimation { viewModel.toggleMode() }
     }
 }

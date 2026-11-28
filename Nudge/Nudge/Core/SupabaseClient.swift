@@ -23,6 +23,16 @@ let supabase = SupabaseClient(
     supabaseURL: SupabaseConfig.url,
     supabaseKey: SupabaseConfig.publishableKey,
     options: .init(
-        auth: .init(emitLocalSessionAsInitialSession: true)
+        auth: .init(
+            // PKCE is the SDK default (2.43.1), but it is load-bearing for security
+            // so it is pinned here. Auth emails redirect to the custom scheme
+            // `nudge://`, which any app can register. With PKCE the redirect only
+            // carries a one-time code; exchanging it requires the code verifier
+            // this device stored (in the keychain) when it requested the email,
+            // so an app that intercepts the link can't turn it into a session.
+            // The implicit flow would put the access + refresh tokens in the URL.
+            flowType: .pkce,
+            emitLocalSessionAsInitialSession: true
+        )
     )
 )

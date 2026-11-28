@@ -8,11 +8,13 @@ internal import Auth
 struct NudgeApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
+    /// App-level so its sheets sit above RootView and survive its auth-driven branch switches.
+    @StateObject private var authRecovery = AuthRecoveryCoordinator()
     @Environment(\.scenePhase) private var scenePhase
 
-    // Set when onForeground bails because currentUser was nil (cold start auth race).
-    // Cleared once the deferred monitoring registration runs.
-    @State private var pendingForegroundSync = false
+    /// Runs `onForeground` once per trip to the foreground, never twice at once, and
+    /// defers it until the user is known on a cold start (auth race).
+    @State private var foregroundSync = ForegroundSync()
 
     private let monitoringService = MonitoringRegistrationService()
     private let goalService = GoalService()
@@ -33,34 +35,48 @@ struct NudgeApp: App {
                         Task { await appState.pushTokens.didReceiveDeviceToken(token) }
                     }
                 }
+                .environmentObject(authRecovery)
+                .sheet(item: $authRecovery.activeSheet, onDismiss: authRecovery.sheetDidDismiss) { sheet in
+                    switch sheet {
+                    case .forgotPassword(let prefillEmail):
+                        ForgotPasswordView(prefillEmail: prefillEmail, onClose: authRecovery.dismissSheet)
+                    case .setNewPassword:
+                        SetNewPasswordView(onFinished: authRecovery.dismissSheet)
+                    }
+                }
+                .alert(AuthLinkFailure.alertTitle, isPresented: $authRecovery.isShowingLinkAlert) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(authRecovery.linkAlertMessage)
+                }
+                // Password-reset and email-confirmation links (nudge://…).
+                .onOpenURL { url in
+                    Task { await authRecovery.handleOpenURL(url) }
+                }
         }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active {
-                Task { await onForeground() }
-            } else if newPhase == .background {
+            foregroundSync.scenePhaseChanged(
+                to: newPhase,
+                userId: appState.currentUser?.id,
+                perform: onForeground
+            )
+            if newPhase == .background {
                 // Ask the OS to wake us later to drain any queued nudge triggers.
                 scheduleNudgeTriggerProcessing()
             }
         }
-        // Auth race recovery: if onForeground bailed because currentUser was nil,
-        // run monitoring registration as soon as the user becomes available.
-        .onChange(of: appState.currentUser) { _, newUser in
-            if newUser != nil && pendingForegroundSync {
-                pendingForegroundSync = false
-                Task { await onForeground() }
-            }
+        // Auth race recovery: a foreground that arrived before the session check
+        // finished runs as soon as the user is known. Keyed on the id, not the whole
+        // `User`, so token refreshes (which republish `currentUser`) don't fire it.
+        .onChange(of: appState.currentUser?.id) { _, newUserId in
+            foregroundSync.userChanged(to: newUserId, perform: onForeground)
         }
     }
 
     // MARK: - Foreground handler
 
-    private func onForeground() async {
-        guard let userId = appState.currentUser?.id else {
-            pendingForegroundSync = true
-            return
-        }
-        pendingForegroundSync = false
-
+    /// Called through `foregroundSync` only: once per foreground, one at a time.
+    private func onForeground(userId: UUID) async {
         // Never prompts — onboarding's PermissionsView owns the permission request. Re-registering
         // each foreground keeps the stored token fresh (APNs may rotate it).
         await PushRegistration.registerIfAuthorized()
