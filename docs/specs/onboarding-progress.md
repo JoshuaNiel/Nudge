@@ -191,24 +191,22 @@ Supersedes the "Skip for now" handling and the banner actions above, where they 
   on device, the header is gray on all tabs, the banners sit below it, and revoking Screen Time
   shows its banner.
 
-## 5d. Main-tab header style (user decision 2026-11-27, PR #15 review)
-- **Every main tab** (Dashboard, Apps, Goals, Friends, Settings; and Categories when #22 lands)
-  uses the same header: the compact, inline-height navigation bar (no large title), with the
-  tab's title **left-aligned** at the leading edge in a slightly larger, bold font
-  (`.title3.bold()`, ~20pt, vs. the standard 17pt inline title). The gray bar background from
-  §5c is kept.
-- Implemented once, in the shared `mainTabHeader(title:)` modifier (replacing today's
-  `mainTabHeader()` and each tab's own `.navigationTitle`), so the tabs can't drift apart.
-  The tab's `navigationTitle` is still set (for accessibility, and as the back-button label on
-  pushed screens such as the friend screen), but the centered system title is not shown.
-- On iOS 26, the leading title must not render inside a Liquid Glass toolbar-item bubble (hide
-  the shared item background there).
-- Trailing toolbar buttons (Dashboard Refresh, Goals +, Friends +, etc.) stay where they are.
-- **Not affected:** pushed screens (friend screen) and sheets keep the standard centered inline
-  title.
-- Done when: on device, all five tabs show the same compact gray header with a left-aligned
-  larger title; the friend screen's back button still reads "Friends"; VoiceOver reads each
-  tab's title as a header.
+## 5d. Main-tab header style (user decisions 2026-11-27, PR #15 review; revised after device test)
+- **Every main tab** (Dashboard, Apps, Goals, Friends, Settings; Categories when #22 lands) uses
+  Apple's **native large navigation title** (`.navigationBarTitleDisplayMode(.large)`),
+  left-aligned, shrunk app-wide from 34pt to **~28pt bold**. The font is set once at launch via
+  `UINavigationBarAppearance.largeTitleTextAttributes` and scales with Dynamic Type
+  (`UIFontMetrics(forTextStyle: .largeTitle)`).
+- Native titles are required so the push transition keeps the **title-morphs-into-back-button
+  animation** (Friends → friend screen). No custom title views or principal-item tricks.
+- The gray bar background from §5c stays visible in both the expanded and collapsed states.
+- `mainTabHeader(title:)` stays the single shared modifier, so the tabs can't drift apart.
+- Not affected: pushed screens and sheets keep their inline centered titles.
+- Superseded (first device test, 2026-11-27): the compact bar with a custom 20pt leading title —
+  too small, and it broke the back-button animation.
+- Done when (iPhone 13, iOS 17.6.1): all five tabs show the same left-aligned ~28pt title on a
+  gray bar; Friends → friend shows the morph animation and a "‹ Friends" back button; lists
+  (Goals, Friends, Settings) collapse the title to inline on scroll.
 
 ## 6. Edge cases
 - **Sign-in on a device with someone else's queued writes:** those stay queued and untouched.

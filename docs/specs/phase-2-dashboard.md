@@ -275,8 +275,9 @@ judgment calls; the user may revisit any of them.
 - The toolbar Refresh button is unchanged.
 
 ### D4. Main-tab header style — see onboarding-progress §5d
-The Dashboard keeps the compact (inline-height) bar; the title moves to the leading edge in a
-larger font, and all main tabs adopt the same style.
+~~The Dashboard keeps the compact (inline-height) bar; the title moves to the leading edge in a
+larger font, and all main tabs adopt the same style.~~ Superseded by §5d (revised): native large
+title at ~28pt on every main tab.
 
 ### Done when (2026-11-27)
 - **Unit tests:** `DashboardAvailability.resolve` for every combination of (isLoaded,
@@ -288,3 +289,90 @@ larger font, and all main tabs adopt the same style.
   Screen Time banner), Allow shows the system prompt, and approving brings the report back
   without leaving the app; pulling down Control Center and dismissing it does not reload the
   report; returning from another app does.
+
+---
+
+## Dashboard v2 (user decisions 2026-11-27, after first device test of PR #15)
+
+Device: iPhone 13, iOS 17.6.1. Supersedes earlier sections where they differ.
+
+### V1. Bug: report stuck on the spinner after a day change or Refresh
+**Seen:** stepping days or tapping Refresh often left the spinner showing; switching tabs and back
+showed the report. Console: repeated `VS terminated … Terminated=disconnect method`.
+**Cause (researched, Apple Developer Forums 723118, 723491, 730064, 750698; Apple docs example):**
+every day change and refresh changed the report's `.id`, which disconnects the remote view and
+connects a new one in the same frame. The new connection sometimes never draws, and the app can't
+detect it. Apple recommends one report on screen, changing only its filter.
+**Fix:**
+- Keep **one** `DeviceActivityReport` alive. Day, week and mode changes change **only its filter**
+  (built by a pure, tested function of (mode, selected date)); they never change `.id`.
+- `.id` is keyed only on `refreshId`. A forced rebuild (toolbar Refresh, real foreground,
+  transition into `.ready`) is **debounced and coalesced**: it happens ~400 ms after the last
+  trigger, and back-to-back triggers produce one rebuild. The policy is a pure, tested type.
+- **Fallback:** behind the report, under the spinner, a "Taking a while? **Reload**" button fades
+  in after ~6 s. Once the extension draws its opaque view it covers both, so the button is only
+  ever visible when the report failed to draw. Reload = one forced rebuild.
+- Done when (device): 20 fast taps on `<`/`>` and 10 Refresh taps never leave a stuck spinner
+  (or, if one happens, Reload recovers it).
+
+### V2. Day | Week mode
+- A segmented control **Day | Week** at the top of the page content (below the header and any
+  banner, above the date navigator). Default Day. Kept while the app runs; not persisted.
+- **Week = Sunday–Saturday** (hard-coded for now; a user-set week-start day is backlogged). The
+  week filter is `.daily(during:)` from Sunday 00:00 to the earlier of next Sunday 00:00 and the
+  end of today, so the extension gets one segment per day.
+- Switching Day → Week shows the week containing the selected day; Week → Day selects today if
+  that week is the current week, otherwise the week's Saturday.
+
+### V3. Date navigator and date picker
+- `<  [title]  >`. Day titles as before ("Today", "Yesterday", "Nov 25"). Week titles are
+  **always a date range**: "Nov 15 – 21", "Oct 26 – Nov 1" across months, "Dec 27 – Jan 2"
+  across years (no "This Week"/"Last Week").
+- `<`/`>` step one day or one week. Range: **the last 30 days** (today − 30 … today), as before.
+  In Week mode a week is reachable if any of its days is in range; `>` is disabled on the current
+  week.
+- **Tapping the title** opens a sheet (medium detent) with a graphical `DatePicker` limited to
+  today − 30 … today and a Done button. In Week mode the chosen day selects its week. The title
+  shows it's tappable (a small chevron.down).
+
+### V4. Totals | Averages (Week mode only)
+- Inside the report (the extension), a segmented control **Totals | Averages** at the top of the
+  summary card. Default Totals.
+- **Averages** divide the week's total time, pickups and every row by the **number of days counted**:
+  days in the week up to and including today (current week), otherwise 7. Labels: "Daily
+  Average" instead of "Total Screen Time"; rows show "/day".
+- The pure math (days counted, average rounding) lives in `Shared/` with unit tests.
+
+### V5. Apps | Categories breakdown
+- Inside the report, the breakdown section header becomes a segmented control **Apps |
+  Categories**. Default Apps.
+- **Categories** = Apple's built-in Screen Time categories from the report data (`segment.categories`):
+  `Label(categoryToken)` for name and icon, time, proportional bar, sorted like apps. Aggregated in
+  `Shared/UsageSummary.swift` (generic, tested) alongside apps.
+- Nudge's own categories (#22) are added later; the breakdown type is an enum so a third source
+  can be added without restructuring.
+- **Device check:** whether the in-report controls (V4, V5) keep their selection when the host
+  changes the filter. If they reset on every day step, report it; the fallback is to accept the
+  reset or move the controls to the host.
+
+### V7. Custom loading indicator
+- Replace Apple's default `ProgressView` spinner with a Nudge-branded loading indicator. A
+  designer subagent builds **several options** as reusable SwiftUI views, viewable side by side
+  in a DEBUG-only gallery (Settings → "Loading styles", debug builds only). The user picks one;
+  then the chosen view replaces `ProgressView` in the Dashboard (`.loading` state and behind the
+  report) and in the app's other loading states, and the other options are deleted.
+- Requirements for every option: iOS 17, light and dark mode, Reduce Motion (a calm, non-moving
+  fallback), VoiceOver label "Loading", cheap to animate (no per-frame work when off screen),
+  sizes small (inline) and large (full screen).
+
+### V6. Header
+See onboarding-progress §5d (revised): native large title, ~28pt, all main tabs.
+
+### Done when (v2)
+- **Unit tests:** filter interval for (mode, date) incl. Sun–Sat weeks, today-clipping, DST,
+  month-spanning; week titles; week stepping and range bounds; Day↔Week selection mapping;
+  date-picker range; refresh debounce/coalesce policy; days-counted and averages; category
+  aggregation and sort.
+- **Device:** V1 stress check; Day/Week switch; week totals vs. Settings → Screen Time's week
+  view (iPhone); Averages = totals ÷ days; Categories match Settings' categories; date picker
+  limits; controls' state across day steps (V5 note).
