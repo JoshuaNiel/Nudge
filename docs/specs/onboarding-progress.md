@@ -175,6 +175,22 @@ Supersedes the "Skip for now" handling and the banner actions above, where they 
   - On device: Skip on the page → never shown again; tapping + without Screen Time → sheet →
     prompt; saving a goal with notifications denied → sheet with Open Settings.
 
+## 5c. Banner layout + Screen Time status freshness (user feedback 2026-11-27)
+- **Header:** every main tab (Dashboard, Goals, Categories, Friends, Settings) always shows the
+  navigation bar's gray background (`.toolbarBackground(.visible, for: .navigationBar)`,
+  system material), whether or not a banner is present.
+- **Banners are not part of the header.** They render as the first element of the page content,
+  below the navigation bar, with standard page padding (`docs/conventions.md` spacing). Remove
+  the `safeAreaInset` placement. They must not be drawn on the bar's background. Banners still
+  stay visible regardless of empty, loading or error states.
+- **Screen Time status freshness:** `SystemPermissionStatusProvider` observes
+  `AuthorizationCenter.shared.$authorizationStatus` (Combine) and republishes changes, in
+  addition to the foreground refresh, so a revoked or granted Screen Time permission updates the
+  banner without relying on a cached read.
+- Done when: unit tests for the provider publishing a status change from an injected publisher;
+  on device, the header is gray on all tabs, the banners sit below it, and revoking Screen Time
+  shows its banner.
+
 ## 6. Edge cases
 - **Sign-in on a device with someone else's queued writes:** those stay queued and untouched.
 - **The server rejects the name** (e.g. a non-blank check): the write is dropped and logged. On
