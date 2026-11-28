@@ -62,19 +62,14 @@ struct ForgotPasswordView: View {
 
                     // Primary action
                     Button(action: submit) {
-                        Group {
-                            if viewModel.isSending {
-                                ProgressView()
-                            } else {
-                                Text(viewModel.status == .sent ? "Resend link" : "Send reset link")
-                                    .fontWeight(.semibold)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(viewModel.canSubmit ? Color.accentColor : Color.secondary)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        Text(viewModel.status == .sent ? "Resend link" : "Send reset link")
+                            .fontWeight(.semibold)
+                            .replacedByLoadingIndicator(while: viewModel.isSending, tone: .onFilled)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(viewModel.canSubmit ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                     .disabled(!viewModel.canSubmit)
                     .padding(.horizontal, 24)

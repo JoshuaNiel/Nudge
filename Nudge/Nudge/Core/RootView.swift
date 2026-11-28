@@ -69,7 +69,7 @@ struct RootView: View {
         switch currentScreen {
         case .loading:
             // Briefly shown while the Supabase session check (or a first-launch seed) completes
-            ProgressView()
+            NudgeLoadingIndicator()
         case .accountDeleted:
             AccountDeletedView(onBackToSignIn: appState.backToSignInAfterDeletion)
         case .onboarding:

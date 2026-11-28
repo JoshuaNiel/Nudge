@@ -73,20 +73,15 @@ struct ConfirmEmailView: View {
 
     private var resendButton: some View {
         Button(action: resend) {
-            Group {
-                if viewModel.resendStatus == .sending {
-                    ProgressView()
-                } else {
-                    Text(viewModel.resendButtonTitle)
-                        .fontWeight(.semibold)
-                        .monospacedDigit()
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(viewModel.canResend ? Color.accentColor : Color.secondary)
-            .foregroundStyle(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            Text(viewModel.resendButtonTitle)
+                .fontWeight(.semibold)
+                .monospacedDigit()
+                .replacedByLoadingIndicator(while: viewModel.resendStatus == .sending, tone: .onFilled)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(viewModel.canResend ? Color.accentColor : Color.secondary)
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .disabled(!viewModel.canResend)
         .padding(.horizontal, 24)

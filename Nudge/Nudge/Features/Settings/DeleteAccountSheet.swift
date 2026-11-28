@@ -35,13 +35,9 @@ struct DeleteAccountSheet: View {
                     Button(role: .destructive) {
                         viewModel.confirmDeletion(notifying: appState)
                     } label: {
-                        HStack(spacing: 8) {
-                            if viewModel.isDeleting {
-                                ProgressView()
-                            }
-                            Text(viewModel.isDeleting ? "Deleting Account…" : "Delete Account")
-                        }
-                        .frame(maxWidth: .infinity)
+                        Text(viewModel.isDeleting ? "Deleting Account…" : "Delete Account")
+                            .prefixedByLoadingIndicator(while: viewModel.isDeleting)
+                            .frame(maxWidth: .infinity)
                     }
                     .disabled(!viewModel.canSubmit)
                 }

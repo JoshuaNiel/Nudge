@@ -52,19 +52,14 @@ struct AddFriendSheet: View {
                     }
 
                     Button(action: submit) {
-                        Group {
-                            if isLoading {
-                                ProgressView()
-                            } else {
-                                Text("Send Consent Request")
-                                    .fontWeight(.semibold)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(!isFormValid ? Color.secondary : Color.accentColor)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        Text("Send Consent Request")
+                            .fontWeight(.semibold)
+                            .replacedByLoadingIndicator(while: isLoading, tone: .onFilled)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(!isFormValid ? Color.secondary : Color.accentColor)
+                            .foregroundStyle(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                     .disabled(!isFormValid || isLoading)
                     .padding(.horizontal, 24)

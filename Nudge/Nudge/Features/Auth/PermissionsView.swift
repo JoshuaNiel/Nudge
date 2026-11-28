@@ -131,19 +131,14 @@ private struct PermissionPageView: View {
 
             VStack(spacing: 12) {
                 Button(action: onPrimary) {
-                    Group {
-                        if isLoading {
-                            ProgressView()
-                        } else {
-                            Text(primaryLabel)
-                                .fontWeight(.semibold)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.accentColor)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    Text(primaryLabel)
+                        .fontWeight(.semibold)
+                        .replacedByLoadingIndicator(while: isLoading, tone: .onFilled)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.accentColor)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
                 .disabled(isLoading)
 

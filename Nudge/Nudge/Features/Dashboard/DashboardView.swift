@@ -106,7 +106,7 @@ struct DashboardView: View {
         switch availability {
         case .loading:
             // Before the first status read: no access screen flash on a cold start (D2).
-            ProgressView()
+            NudgeLoadingIndicator()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .needsAuthorization:
             ContentUnavailableView {
@@ -195,7 +195,7 @@ struct DashboardView: View {
             // Visible until the extension draws its (opaque) view over it, which also covers
             // the Reload fallback: that only shows when the report failed to draw (V1).
             VStack(spacing: 12) {
-                ProgressView()
+                NudgeLoadingIndicator()
                 if isReloadOffered {
                     HStack(spacing: 4) {
                         Text("Taking a while?")

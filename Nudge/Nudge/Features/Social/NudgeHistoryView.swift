@@ -14,7 +14,7 @@ struct NudgeHistoryContent: View {
     var body: some View {
         Group {
             if viewModel.isLoading {
-                ProgressView()
+                NudgeLoadingIndicator()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = viewModel.error {
                 // Scrollable so pull-to-refresh can retry.

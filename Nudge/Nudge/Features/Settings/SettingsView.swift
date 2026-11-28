@@ -172,19 +172,15 @@ struct SettingsView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 8) {
-                    if viewModel.isSaving {
-                        ProgressView().tint(.white)
-                    }
-                    Text(viewModel.isSaving ? "Saving…" : "Save")
-                        .fontWeight(.semibold)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                // The WHOLE button changes color with state, not just the label.
-                .background(viewModel.canSave ? Color.accentColor : Color(.systemGray4))
-                .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                Text(viewModel.isSaving ? "Saving…" : "Save")
+                    .fontWeight(.semibold)
+                    .prefixedByLoadingIndicator(while: viewModel.isSaving, tone: .onFilled)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    // The WHOLE button changes color with state, not just the label.
+                    .background(viewModel.canSave ? Color.accentColor : Color(.systemGray4))
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .disabled(!viewModel.canSave)
         }

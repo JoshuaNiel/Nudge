@@ -27,7 +27,7 @@ struct SocialView: View {
         NavigationStack(path: $path) {
             Group {
                 if viewModel.isLoading {
-                    ProgressView()
+                    NudgeLoadingIndicator()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let errorMessage = viewModel.error {
                     errorView(message: errorMessage)

@@ -120,19 +120,14 @@ struct FriendDetailView: View {
             Button(role: .destructive) {
                 confirmRemove = true
             } label: {
-                Group {
-                    if viewModel.isRemoving {
-                        ProgressView()
-                    } else {
-                        Text("Remove Friend")
-                            .fontWeight(.semibold)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.red.opacity(0.12))
-                .foregroundStyle(.red)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                Text("Remove Friend")
+                    .fontWeight(.semibold)
+                    .replacedByLoadingIndicator(while: viewModel.isRemoving)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.red.opacity(0.12))
+                    .foregroundStyle(.red)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .disabled(viewModel.isRemoving)
         }
@@ -204,7 +199,7 @@ struct RenameFriendSheet: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if model.isSaving {
-                        ProgressView()
+                        NudgeLoadingIndicator(size: .small)
                     } else {
                         Button("Save", action: save)
                             .fontWeight(.semibold)

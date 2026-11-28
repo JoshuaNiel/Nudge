@@ -82,19 +82,14 @@ struct AuthView: View {
 
                 // Primary action
                 Button(action: submitEmailPassword) {
-                    Group {
-                        if viewModel.isLoading {
-                            ProgressView()
-                        } else {
-                            Text(viewModel.mode == .signIn ? "Sign In" : "Sign Up")
-                                .fontWeight(.semibold)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.accentColor)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    Text(viewModel.mode == .signIn ? "Sign In" : "Sign Up")
+                        .fontWeight(.semibold)
+                        .replacedByLoadingIndicator(while: viewModel.isLoading, tone: .onFilled)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.accentColor)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
                 .disabled(viewModel.isLoading)
                 .padding(.horizontal, 24)

@@ -77,19 +77,14 @@ struct SetNewPasswordView: View {
 
                 // Primary action
                 Button(action: submit) {
-                    Group {
-                        if viewModel.isSaving {
-                            ProgressView()
-                        } else {
-                            Text("Update password")
-                                .fontWeight(.semibold)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(viewModel.canSubmit ? Color.accentColor : Color.secondary)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    Text("Update password")
+                        .fontWeight(.semibold)
+                        .replacedByLoadingIndicator(while: viewModel.isSaving, tone: .onFilled)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(viewModel.canSubmit ? Color.accentColor : Color.secondary)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
                 .disabled(!viewModel.canSubmit)
                 .padding(.horizontal, 24)

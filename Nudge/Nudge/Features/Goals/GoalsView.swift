@@ -26,7 +26,7 @@ private struct GoalsScreen: View {
         NavigationStack {
             Group {
                 if viewModel.isLoading {
-                    ProgressView()
+                    NudgeLoadingIndicator()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let errorMessage = viewModel.error {
                     errorView(message: errorMessage)
@@ -397,7 +397,7 @@ private struct TargetPickerStep: View {
     var body: some View {
         VStack(spacing: 0) {
             if isLoading {
-                ProgressView().padding(.top, 48)
+                NudgeLoadingIndicator().padding(.top, 48)
             } else if let error = errorMessage {
                 Text(error).font(.footnote).foregroundStyle(.red).padding()
             } else if targetType == .category {
@@ -548,18 +548,13 @@ private struct LimitAndFrequencyStep: View {
                 }
 
                 Button(action: onConfirm) {
-                    Group {
-                        if isLoading {
-                            ProgressView()
-                        } else {
-                            Text("Save Goal").fontWeight(.semibold)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(!isLimitSet ? Color.secondary : Color.accentColor)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    Text("Save Goal").fontWeight(.semibold)
+                        .replacedByLoadingIndicator(while: isLoading, tone: .onFilled)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(!isLimitSet ? Color.secondary : Color.accentColor)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
                 .disabled(!isLimitSet || isLoading)
                 .padding(.horizontal, 24)

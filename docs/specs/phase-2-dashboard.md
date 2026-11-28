@@ -367,6 +367,11 @@ detect it. Apple recommends one report on screen, changing only its filter.
 - Requirements for every option: iOS 17, light and dark mode, Reduce Motion (a calm, non-moving
   fallback), VoiceOver label "Loading", cheap to animate (no per-frame work when off screen),
   sizes small (inline) and large (full screen).
+- **Chosen (2026-11-27):** Tipping Point (`NudgeLoadingIndicator`, `Features/Shared/LoadingIndicator*.swift`)
+  replaces every indeterminate `ProgressView` in the app (large for screens/lists, small inline,
+  white `.onFilled` tone on filled buttons; button labels use `.replacedByLoadingIndicator` /
+  `.prefixedByLoadingIndicator` so they keep their height). Rolling Hills stays in the code,
+  unused, for later. Ring Nudge, Cradle, Breathe and the debug gallery were removed.
 
 ### V6. Header
 See onboarding-progress §5d (revised): native large title, ~28pt, all main tabs.
