@@ -10,6 +10,10 @@ struct NudgeApp: App {
     @StateObject private var appState = AppState()
     /// App-level so its sheets sit above RootView and survive its auth-driven branch switches.
     @StateObject private var authRecovery = AuthRecoveryCoordinator()
+    /// The full-screen permissions page appears at most once per device (spec §5b). Declared
+    /// before `onboarding`: its first-launch inference reads the legacy flag that
+    /// `onboarding.prepare` deletes.
+    @StateObject private var permissionsPage = PermissionsPageTracker()
     /// The signed-in user's onboarding progress (device copy + outbox; onboarding-progress spec).
     @StateObject private var onboarding = OnboardingProgressController()
     /// Screen Time + notification statuses for onboarding routing and the permission banners.
@@ -34,6 +38,7 @@ struct NudgeApp: App {
                 .environmentObject(appDelegate.pushRouter)
                 .environmentObject(onboarding)
                 .environmentObject(permissions)
+                .environmentObject(permissionsPage)
                 .task {
                     // Route APNs tokens from the UIKit delegate to the session-aware manager.
                     // The delegate buffers a token that arrives before this runs.

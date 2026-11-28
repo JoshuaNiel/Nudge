@@ -11,8 +11,17 @@ enum AppStorageKeys {
     /// The outbox of pending server writes (`Outbox`), all users, oldest first.
     static let outbox = "outbox.pendingWrites"
 
+    /// Device-wide (not per user, never synced): the full-screen permissions page has been
+    /// reached on this device, so it is never shown again (`PermissionsPageTracker`,
+    /// onboarding-progress spec §5b). Missing only before the first launch of the build that
+    /// added it; that launch infers it from existing data and records the answer.
+    static let permissionsPageShown = "permissionsPageShown"
+
+    /// Prefix of every user's onboarding device copy key.
+    static let onboardingProgressPrefix = "onboarding.progress."
+
     /// A user's device copy of their onboarding progress (`OnboardingStore`).
     static func onboardingProgress(for userId: UUID) -> String {
-        "onboarding.progress.\(userId.uuidString)"
+        onboardingProgressPrefix + userId.uuidString
     }
 }

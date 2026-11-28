@@ -7,6 +7,7 @@ struct RootView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var onboarding: OnboardingProgressController
     @EnvironmentObject private var permissions: PermissionStatusStore
+    @EnvironmentObject private var permissionsPage: PermissionsPageTracker
 
     enum Screen: Equatable {
         case loading
@@ -71,10 +72,11 @@ struct RootView: View {
         case .permissions(let pending):
             PermissionsView(
                 pending: pending,
-                onRequest: requestPermission,
-                onSkip: onboarding.skip,
-                onFinished: onboarding.markCompleted
+                onRequest: permissions.request,
+                onFinished: finishPermissionsPage
             )
+            // Reaching the page is what counts: it is never shown again on this device (§5b).
+            .onAppear(perform: permissionsPage.markReached)
         case .main:
             ContentView()
         }
@@ -97,7 +99,7 @@ struct RootView: View {
             progress: progress,
             screenTime: permissions.screenTime,
             notifications: permissions.notifications,
-            skipped: onboarding.skippedPermissions
+            permissionsPageDone: permissionsPage.isFinished
         )
     }
 }
@@ -105,13 +107,11 @@ struct RootView: View {
 extension RootView {
     // MARK: - Permissions
 
-    /// Shows the system prompt. A request that left the status undetermined (it failed
-    /// without an answer) counts as skipped, so the screen can't get stuck on that page.
-    private func requestPermission(_ permission: DevicePermission) async {
-        await permissions.request(permission)
-        if permissions.status(of: permission) == .notDetermined {
-            onboarding.skip(permission)
-        }
+    /// Everything on the page was answered or skipped: the page is over on this device, and
+    /// the account is completed (with every account step satisfied).
+    private func finishPermissionsPage() {
+        permissionsPage.finish()
+        onboarding.markCompleted()
     }
 }
 
@@ -121,4 +121,5 @@ extension RootView {
         .environmentObject(PushRouter())
         .environmentObject(OnboardingProgressController())
         .environmentObject(PermissionStatusStore())
+        .environmentObject(PermissionsPageTracker())
 }

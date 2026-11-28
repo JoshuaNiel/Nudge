@@ -122,6 +122,21 @@ struct OnboardingStoreTests {
         #expect(store.load(for: userA) == nil)
         #expect(store.load(for: userB) == progress)
     }
+
+    @Test func hasAnyCompletedCopyLooksAtEveryUsersCopy() {
+        let store = OnboardingStore(defaults: defaults)
+        #expect(!store.hasAnyCompletedCopy())
+
+        let pending = OnboardingProgress(completed: false, nextStep: .profile, firstName: nil, lastName: nil,
+                                         updatedAt: Date(timeIntervalSince1970: 1))
+        store.save(pending, for: UUID())
+        #expect(!store.hasAnyCompletedCopy())
+
+        var done = pending
+        done.completed = true
+        store.save(done, for: UUID())
+        #expect(store.hasAnyCompletedCopy())
+    }
 }
 
 // MARK: - Merge rules (device ← server)
@@ -208,30 +223,36 @@ struct OnboardingRoutingTests {
 
     private let statuses: [PermissionStatus] = [.notDetermined, .denied, .granted]
 
-    /// Every combination of (nextStep, completed, Screen Time, notifications).
+    /// Every combination of (nextStep, completed, Screen Time, notifications, page done).
     @Test func everyCombination() {
         for nextStep in [OnboardingAccountStep.profile, nil] {
             for completed in [true, false] {
                 for screenTime in statuses {
                     for notifications in statuses {
-                        let result = OnboardingRouting.destination(
-                            progress: progress(nextStep: nextStep, completed: completed),
-                            screenTime: screenTime, notifications: notifications, skipped: [])
+                        for pageDone in [false, true] {
+                            let result = OnboardingRouting.destination(
+                                progress: progress(nextStep: nextStep, completed: completed),
+                                screenTime: screenTime, notifications: notifications,
+                                permissionsPageDone: pageDone)
 
-                        var pending: [DevicePermission] = []
-                        if screenTime == .notDetermined { pending.append(.screenTime) }
-                        if notifications == .notDetermined { pending.append(.notifications) }
+                            var pending: [DevicePermission] = []
+                            if screenTime == .notDetermined { pending.append(.screenTime) }
+                            if notifications == .notDetermined { pending.append(.notifications) }
 
-                        let expected: OnboardingDestination
-                        if nextStep == .profile {
-                            expected = .profileSetup
-                        } else if !completed || !pending.isEmpty {
-                            expected = .permissions(pending: pending)
-                        } else {
-                            expected = .app
+                            let expected: OnboardingDestination
+                            if nextStep == .profile {
+                                expected = .profileSetup
+                            } else if pageDone {
+                                // Shown once per device (§5b): never again, even if unasked.
+                                expected = completed ? .app : .permissions(pending: [])
+                            } else if !completed || !pending.isEmpty {
+                                expected = .permissions(pending: pending)
+                            } else {
+                                expected = .app
+                            }
+                            #expect(result == expected,
+                                    "nextStep \(String(describing: nextStep)) completed \(completed) st \(screenTime) n \(notifications) page \(pageDone)")
                         }
-                        #expect(result == expected,
-                                "nextStep \(String(describing: nextStep)) completed \(completed) st \(screenTime) n \(notifications)")
                     }
                 }
             }
@@ -241,32 +262,143 @@ struct OnboardingRoutingTests {
     @Test func profileStepWinsEvenForACompletedUser() {
         // e.g. the server rejected the name after completion.
         #expect(OnboardingRouting.destination(progress: progress(nextStep: .profile, completed: true),
-                                              screenTime: .granted, notifications: .granted, skipped: []) == .profileSetup)
+                                              screenTime: .granted, notifications: .granted,
+                                              permissionsPageDone: false) == .profileSetup)
+        #expect(OnboardingRouting.destination(progress: progress(nextStep: .profile, completed: true),
+                                              screenTime: .granted, notifications: .granted,
+                                              permissionsPageDone: true) == .profileSetup)
     }
 
     @Test func completedUserOnNewDeviceSeesOnlyUnaskedPermissions() {
         #expect(OnboardingRouting.destination(progress: progress(nextStep: nil, completed: true),
-                                              screenTime: .notDetermined, notifications: .granted, skipped: [])
+                                              screenTime: .notDetermined, notifications: .granted,
+                                              permissionsPageDone: false)
                 == .permissions(pending: [.screenTime]))
     }
 
     @Test func deniedCountsAsAsked() {
         #expect(OnboardingRouting.destination(progress: progress(nextStep: nil, completed: true),
-                                              screenTime: .denied, notifications: .denied, skipped: []) == .app)
+                                              screenTime: .denied, notifications: .denied,
+                                              permissionsPageDone: false) == .app)
     }
 
     @Test func notCompletedWithEverythingAskedStillFinishesThroughPermissions() {
         #expect(OnboardingRouting.destination(progress: progress(nextStep: nil, completed: false),
-                                              screenTime: .granted, notifications: .denied, skipped: [])
+                                              screenTime: .granted, notifications: .denied,
+                                              permissionsPageDone: false)
                 == .permissions(pending: []))
     }
 
-    @Test func permissionsSkippedThisSessionAreNotShownAgain() {
-        let p = progress(nextStep: nil, completed: true)
-        #expect(OnboardingRouting.destination(progress: p, screenTime: .notDetermined, notifications: .notDetermined,
-                                              skipped: [.screenTime]) == .permissions(pending: [.notifications]))
-        #expect(OnboardingRouting.destination(progress: p, screenTime: .notDetermined, notifications: .notDetermined,
-                                              skipped: [.screenTime, .notifications]) == .app)
+    @Test func pageShownOnceIsNeverShownAgainEvenWithUnaskedPermissions() {
+        #expect(OnboardingRouting.destination(progress: progress(nextStep: nil, completed: true),
+                                              screenTime: .notDetermined, notifications: .notDetermined,
+                                              permissionsPageDone: true) == .app)
+    }
+
+    @Test func pageAlreadyShownOnThisDeviceStillFinishesANewAccountWithoutAsking() {
+        // Another account finished the page on this device; this one just set up a profile.
+        #expect(OnboardingRouting.destination(progress: progress(nextStep: nil, completed: false),
+                                              screenTime: .notDetermined, notifications: .notDetermined,
+                                              permissionsPageDone: true) == .permissions(pending: []))
+    }
+}
+
+// MARK: - Permissions page shown once per device (spec §5b)
+
+@Suite("Permissions page shown once")
+@MainActor
+struct PermissionsPageTrackerTests {
+
+    private let defaults = freshDefaults()
+
+    private func makeTracker(completedDeviceCopy: Bool = false) -> PermissionsPageTracker {
+        PermissionsPageTracker(defaults: defaults, hasCompletedDeviceCopy: { completedDeviceCopy })
+    }
+
+    @Test func newDeviceHasNotShownThePage() {
+        let tracker = makeTracker()
+        #expect(!tracker.isFinished)
+        // The inference ran once; the result is recorded so it never runs again.
+        #expect(defaults.object(forKey: AppStorageKeys.permissionsPageShown) as? Bool == false)
+    }
+
+    @Test func reachingThePageRecordsTheFlagButKeepsItOnScreen() {
+        let tracker = makeTracker()
+        tracker.markReached()
+        #expect(defaults.bool(forKey: AppStorageKeys.permissionsPageShown))
+        #expect(!tracker.isFinished)
+    }
+
+    @Test func finishingThePageEndsIt() {
+        let tracker = makeTracker()
+        tracker.markReached()
+        tracker.finish()
+        #expect(tracker.isFinished)
+        #expect(defaults.bool(forKey: AppStorageKeys.permissionsPageShown))
+    }
+
+    @Test func reachedPageIsFinishedOnTheNextLaunch() {
+        // e.g. the app was killed while the page was up: whatever happened there finished it.
+        makeTracker().markReached()
+        #expect(makeTracker().isFinished)
+    }
+
+    @Test func finishedPageIsFinishedOnTheNextLaunch() {
+        let first = makeTracker()
+        first.markReached()
+        first.finish()
+        #expect(makeTracker().isFinished)
+    }
+
+    @Test func existingUserWithTheLegacyFlagHasAlreadySeenThePage() {
+        defaults.set(true, forKey: AppStorageKeys.onboardingComplete)
+        #expect(makeTracker().isFinished)
+        #expect(defaults.bool(forKey: AppStorageKeys.permissionsPageShown))
+    }
+
+    @Test func existingUserWithACompletedDeviceCopyHasAlreadySeenThePage() {
+        #expect(makeTracker(completedDeviceCopy: true).isFinished)
+        #expect(defaults.bool(forKey: AppStorageKeys.permissionsPageShown))
+    }
+
+    @Test func legacyFlagFalseIsNotAnExistingUser() {
+        defaults.set(false, forKey: AppStorageKeys.onboardingComplete)
+        #expect(!makeTracker().isFinished)
+    }
+
+    @Test func inferenceRunsOnlyWhenTheFlagIsMissing() {
+        // First launch of a fresh install: nothing to infer, so the page will be shown.
+        #expect(!makeTracker().isFinished)
+        // Later in that install the server seeds a completed copy (a reinstall); that must not
+        // count as "already shown".
+        #expect(!makeTracker(completedDeviceCopy: true).isFinished)
+    }
+
+    @Test func inferenceRule() {
+        #expect(PermissionsPageTracker.inferShown(legacyOnboardingComplete: false, completedDeviceCopy: false) == false)
+        #expect(PermissionsPageTracker.inferShown(legacyOnboardingComplete: true, completedDeviceCopy: false))
+        #expect(PermissionsPageTracker.inferShown(legacyOnboardingComplete: false, completedDeviceCopy: true))
+        #expect(PermissionsPageTracker.inferShown(legacyOnboardingComplete: true, completedDeviceCopy: true))
+    }
+
+    @Test func keyName() {
+        #expect(AppStorageKeys.permissionsPageShown == "permissionsPageShown")
+    }
+}
+
+// MARK: - Permissions page: current page (spec §5b)
+
+@Suite("Permissions page order")
+@MainActor
+struct PermissionsPageOrderTests {
+
+    @Test func showsTheFirstPermissionNotAnsweredOrSkippedOnThisPage() {
+        #expect(PermissionsView.currentPage(pending: [.screenTime, .notifications], dismissed: []) == .screenTime)
+        #expect(PermissionsView.currentPage(pending: [.screenTime, .notifications], dismissed: [.screenTime])
+                == .notifications)
+        #expect(PermissionsView.currentPage(pending: [.screenTime, .notifications],
+                                            dismissed: [.screenTime, .notifications]) == nil)
+        #expect(PermissionsView.currentPage(pending: [], dismissed: []) == nil)
     }
 }
 
@@ -391,12 +523,10 @@ struct OnboardingProgressControllerTests {
         network.isOnline = false
         let (controller, _, store) = makeController()
         await controller.prepare(userId: user)
-        controller.skip(.screenTime)
 
         await controller.prepare(userId: nil)
 
         #expect(controller.progress == nil)
-        #expect(controller.skippedPermissions.isEmpty)
         #expect(store.load(for: user) != nil)
     }
 
@@ -510,14 +640,6 @@ struct OnboardingProgressControllerTests {
         await controller.prepare(userId: user)
         await controller.refresh()
         #expect(server.fetchCount == 0)
-    }
-
-    @Test func skipRecordsThePermissionForThisSession() async {
-        network.isOnline = false
-        let (controller, _, _) = makeController()
-        await controller.prepare(userId: user)
-        controller.skip(.notifications)
-        #expect(controller.skippedPermissions == [.notifications])
     }
 
     // MARK: Account deletion

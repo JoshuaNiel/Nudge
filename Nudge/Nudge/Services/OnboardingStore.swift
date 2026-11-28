@@ -29,6 +29,16 @@ final class OnboardingStore: OnboardingProgressStoring {
     func remove(for userId: UUID) {
         defaults.removeObject(forKey: AppStorageKeys.onboardingProgress(for: userId))
     }
+
+    /// Whether any user's copy on this device says onboarding is completed. Used once, to
+    /// recognize an existing device when `permissionsPageShown` was never recorded.
+    func hasAnyCompletedCopy() -> Bool {
+        let decoder = JSONDecoder()
+        return defaults.dictionaryRepresentation().contains { key, value in
+            guard key.hasPrefix(AppStorageKeys.onboardingProgressPrefix), let data = value as? Data else { return false }
+            return (try? decoder.decode(OnboardingProgress.self, from: data))?.completed == true
+        }
+    }
 }
 
 // MARK: - Account deletion

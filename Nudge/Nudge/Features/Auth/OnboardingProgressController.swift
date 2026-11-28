@@ -15,10 +15,6 @@ final class OnboardingProgressController: ObservableObject {
 
     /// The current user's device copy; `nil` while it is being seeded or when signed out.
     @Published private(set) var progress: OnboardingProgress?
-    /// Permissions the user chose "Skip for now" on during this app session. In memory only:
-    /// device steps are never stored, so a still-unasked permission is offered again on the
-    /// next launch (spec §4; the banners cover it in between).
-    @Published private(set) var skippedPermissions: Set<DevicePermission> = []
     private(set) var userId: UUID?
 
     private let store: OnboardingProgressStoring
@@ -214,18 +210,12 @@ final class OnboardingProgressController: ObservableObject {
         outbox.enqueue(OnboardingOutboxKinds.markOnboardingCompleted, payload: EmptyPayload(), for: userId)
     }
 
-    /// "Skip for now" on a permission page.
-    func skip(_ permission: DevicePermission) {
-        skippedPermissions.insert(permission)
-    }
-
     // MARK: - Private
 
     private func reset() {
         userId = nil
         refreshTask = nil
         if progress != nil { progress = nil }
-        if !skippedPermissions.isEmpty { skippedPermissions = [] }
     }
 
     /// Saves and publishes. A merge with no real change keeps the old copy (and its

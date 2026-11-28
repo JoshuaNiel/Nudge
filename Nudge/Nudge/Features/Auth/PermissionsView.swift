@@ -1,20 +1,28 @@
 import SwiftUI
 
 /// Asks for the device permissions that were never asked on this device, one page each
-/// (docs/specs/onboarding-progress.md §4). Driven by its parent: `pending` shrinks as each
-/// permission is answered or skipped, and once it is empty the screen calls `onFinished`.
+/// (docs/specs/onboarding-progress.md §4, §5b). Shown at most once per device: whatever the
+/// user does on a page (Allow, Deny, Skip for now) moves past it, and once nothing is left the
+/// screen calls `onFinished`.
 struct PermissionsView: View {
-    /// Never-asked permissions still to show, in order.
+    /// Never-asked permissions, in order.
     let pending: [DevicePermission]
     /// Shows the system prompt; returns when the user has answered.
     var onRequest: (DevicePermission) async -> Void
-    var onSkip: (DevicePermission) -> Void
     var onFinished: () -> Void
 
     @State private var isRequesting = false
+    /// Pages already answered or skipped on this screen. Screen-local: the page is never shown
+    /// again on this device, so nothing needs remembering beyond it.
+    @State private var dismissed: Set<DevicePermission> = []
+
+    /// The first pending permission not yet answered or skipped here; `nil` when done.
+    static func currentPage(pending: [DevicePermission], dismissed: Set<DevicePermission>) -> DevicePermission? {
+        pending.first { !dismissed.contains($0) }
+    }
 
     var body: some View {
-        if let permission = pending.first {
+        if let permission = Self.currentPage(pending: pending, dismissed: dismissed) {
             page(for: permission)
                 .id(permission)
         } else {
@@ -37,7 +45,7 @@ struct PermissionsView: View {
                 warning: "You can enable this later in Settings, but the app won't track usage until you do.",
                 isLoading: isRequesting,
                 onPrimary: { request(.screenTime) },
-                onSkip: { onSkip(.screenTime) }
+                onSkip: { skip(.screenTime) }
             )
         case .notifications:
             PermissionPageView(
@@ -49,14 +57,14 @@ struct PermissionsView: View {
                 warning: nil,
                 isLoading: isRequesting,
                 onPrimary: { request(.notifications) },
-                onSkip: { onSkip(.notifications) }
+                onSkip: { skip(.notifications) }
             )
         }
     }
 }
 
 #Preview("Screen Time Step") {
-    PermissionsView(pending: [.screenTime, .notifications], onRequest: { _ in }, onSkip: { _ in }, onFinished: {})
+    PermissionsView(pending: [.screenTime, .notifications], onRequest: { _ in }, onFinished: {})
 }
 
 extension PermissionsView {
@@ -68,7 +76,14 @@ extension PermissionsView {
         Task {
             defer { isRequesting = false }
             await onRequest(permission)
+            // Answered (or the request failed without an answer): either way, move on so the
+            // screen can't get stuck on this page.
+            dismissed.insert(permission)
         }
+    }
+
+    private func skip(_ permission: DevicePermission) {
+        dismissed.insert(permission)
     }
 }
 

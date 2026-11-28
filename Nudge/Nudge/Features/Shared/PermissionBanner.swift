@@ -8,12 +8,11 @@ enum PermissionBannerScreen {
     case dashboard, goals, friends
 }
 
+/// What a banner or in-context ask button does (spec §5b).
 enum PermissionBannerAction: Equatable {
-    /// Never asked: show the system prompt.
+    /// Show the system prompt.
     case requestAuthorization
-    /// Denied: the app's page in Settings.
-    case openAppSettings
-    /// Denied: the app's notification settings.
+    /// Notifications denied (iOS can't re-prompt): the app's notification settings.
     case openNotificationSettings
 }
 
@@ -36,12 +35,13 @@ enum PermissionBanners {
         }
     }
 
-    /// What the button does for a status; `nil` when granted (no banner).
+    /// What the button does for a status; `nil` when granted (no banner). Screen Time always
+    /// shows the system prompt (never Settings); notifications prompt only when never asked.
     static func action(for permission: DevicePermission, status: PermissionStatus) -> PermissionBannerAction? {
-        switch status {
-        case .granted: nil
-        case .notDetermined: .requestAuthorization
-        case .denied: permission == .screenTime ? .openAppSettings : .openNotificationSettings
+        guard status != .granted else { return nil }
+        switch permission {
+        case .screenTime: return .requestAuthorization
+        case .notifications: return status == .denied ? .openNotificationSettings : .requestAuthorization
         }
     }
 
@@ -52,10 +52,10 @@ enum PermissionBanners {
         }
     }
 
-    static func buttonTitle(for permission: DevicePermission) -> String {
-        switch permission {
-        case .screenTime: "Allow"
-        case .notifications: "Turn On"
+    static func buttonTitle(for permission: DevicePermission, status: PermissionStatus) -> String {
+        switch action(for: permission, status: status) {
+        case .openNotificationSettings: "Open Settings"
+        case .requestAuthorization, nil: permission == .screenTime ? "Allow" : "Turn On"
         }
     }
 
@@ -72,6 +72,7 @@ enum PermissionBanners {
 /// One banner: icon, message, action button.
 struct PermissionBanner: View {
     let permission: DevicePermission
+    let status: PermissionStatus
     let onAction: () -> Void
 
     var body: some View {
@@ -82,7 +83,7 @@ struct PermissionBanner: View {
                 .font(.footnote)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
-            Button(PermissionBanners.buttonTitle(for: permission), action: onAction)
+            Button(PermissionBanners.buttonTitle(for: permission, status: status), action: onAction)
                 .font(.footnote.weight(.semibold))
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -95,8 +96,8 @@ struct PermissionBanner: View {
 
 #Preview {
     VStack {
-        PermissionBanner(permission: .screenTime, onAction: {})
-        PermissionBanner(permission: .notifications, onAction: {})
+        PermissionBanner(permission: .screenTime, status: .denied, onAction: {})
+        PermissionBanner(permission: .notifications, status: .denied, onAction: {})
     }
     .padding()
 }
@@ -116,7 +117,9 @@ struct PermissionBannerStack: View {
         if !visible.isEmpty {
             VStack(spacing: 8) {
                 ForEach(visible, id: \.self) { permission in
-                    PermissionBanner(permission: permission) { perform(for: permission) }
+                    PermissionBanner(permission: permission, status: permissions.status(of: permission)) {
+                        perform(for: permission)
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -130,21 +133,9 @@ extension PermissionBannerStack {
     // MARK: - Actions
 
     private func perform(for permission: DevicePermission) {
-        switch PermissionBanners.action(for: permission, status: permissions.status(of: permission)) {
-        case .requestAuthorization:
-            Task { await permissions.request(permission) }
-        case .openAppSettings:
-            open(UIApplication.openSettingsURLString)
-        case .openNotificationSettings:
-            open(UIApplication.openNotificationSettingsURLString)
-        case nil:
-            break
+        Task {
+            await PermissionActionRunner.run(permission, requester: permissions, openURL: { openURL($0) })
         }
-    }
-
-    private func open(_ urlString: String) {
-        guard let url = URL(string: urlString) else { return }
-        openURL(url)
     }
 }
 

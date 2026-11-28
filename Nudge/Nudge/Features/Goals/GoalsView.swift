@@ -3,10 +3,24 @@ import Supabase
 
 // MARK: - GoalsView
 
+/// Reads the app's permission store so the sheet flow can be created with it.
 struct GoalsView: View {
+    @EnvironmentObject private var permissions: PermissionStatusStore
+
+    var body: some View {
+        GoalsScreen(permissions: permissions)
+    }
+}
+
+private struct GoalsScreen: View {
     @EnvironmentObject private var appState: AppState
     @StateObject private var viewModel = GoalsViewModel()
-    @State private var showAddGoal = false
+    /// Add goal plus the in-context permission asks (onboarding-progress spec §5b).
+    @StateObject private var sheetFlow: GoalsSheetFlow
+
+    init(permissions: PermissionStatusStore) {
+        _sheetFlow = StateObject(wrappedValue: GoalsSheetFlow(requester: permissions))
+    }
 
     var body: some View {
         NavigationStack {
@@ -26,18 +40,25 @@ struct GoalsView: View {
             .navigationTitle("Goals")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showAddGoal = true } label: {
+                    Button { sheetFlow.addGoalTapped() } label: {
                         Image(systemName: "plus")
                     }
                 }
             }
-            .sheet(isPresented: $showAddGoal) {
-                AddGoalSheet {
-                    showAddGoal = false
-                    guard let userId = appState.currentUser?.id else { return }
-                    Task { await viewModel.load(userId: userId) }
+            .sheet(item: $sheetFlow.sheet) { sheet in
+                switch sheet {
+                case .addGoal:
+                    AddGoalSheet(onCancel: sheetFlow.addGoalCancelled, onSaved: goalSaved)
+                        .environmentObject(appState)
+                case .ask(let ask):
+                    PermissionAskSheet(
+                        ask: ask,
+                        primaryTitle: sheetFlow.primaryTitle(for: ask),
+                        isLoading: sheetFlow.isRequesting,
+                        onPrimary: { Task { await sheetFlow.primaryTapped() } },
+                        onNotNow: sheetFlow.notNowTapped
+                    )
                 }
-                .environmentObject(appState)
             }
             .task {
                 guard let userId = appState.currentUser?.id else { return }
@@ -103,7 +124,14 @@ struct GoalsView: View {
 
 // MARK: - Actions
 
-extension GoalsView {
+extension GoalsScreen {
+    /// The goal is saved: reload, then (if notifications are off) the notification ask.
+    private func goalSaved() {
+        sheetFlow.goalSaved()
+        guard let userId = appState.currentUser?.id else { return }
+        Task { await viewModel.load(userId: userId) }
+    }
+
     private func deleteGoals(at offsets: IndexSet) {
         guard let userId = appState.currentUser?.id else { return }
         for index in offsets {
@@ -167,7 +195,9 @@ private extension GoalFrequency {
 private enum GoalDuration { case permanent, temporary }
 
 private struct AddGoalSheet: View {
-    var onCompleted: () -> Void
+    var onCancel: () -> Void
+    /// Called after the goal is saved.
+    var onSaved: () -> Void
 
     @EnvironmentObject private var appState: AppState
 
@@ -222,7 +252,7 @@ private struct AddGoalSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if step == .targetType {
-                        Button("Cancel") { onCompleted() }
+                        Button("Cancel", action: onCancel)
                     } else {
                         Button(action: goBack) {
                             Image(systemName: "chevron.left")
@@ -244,7 +274,7 @@ private struct AddGoalSheet: View {
 
 #Preview("Add Goal") {
     Color.clear.sheet(isPresented: .constant(true)) {
-        AddGoalSheet(onCompleted: {})
+        AddGoalSheet(onCancel: {}, onSaved: {})
             .environmentObject(AppState())
     }
 }
@@ -292,7 +322,7 @@ extension AddGoalSheet {
             defer { isLoading = false }
             do {
                 try await GoalService().createGoal(insert)
-                onCompleted()
+                onSaved()
             } catch {
                 errorMessage = error.localizedDescription
             }

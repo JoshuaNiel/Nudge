@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import FamilyControls
 import UserNotifications
+import UIKit
 @testable import Nudge
 
 // Device permission statuses and the post-onboarding permission banners
@@ -141,21 +142,260 @@ struct PermissionBannerTests {
                 == [.notifications])
     }
 
+    /// §5b: Screen Time always shows the system prompt; notifications prompt only when never
+    /// asked, otherwise open the app's notification settings.
     @Test func actionDependsOnStatus() {
         #expect(PermissionBanners.action(for: .screenTime, status: .notDetermined) == .requestAuthorization)
-        #expect(PermissionBanners.action(for: .screenTime, status: .denied) == .openAppSettings)
+        #expect(PermissionBanners.action(for: .screenTime, status: .denied) == .requestAuthorization)
         #expect(PermissionBanners.action(for: .screenTime, status: .granted) == nil)
         #expect(PermissionBanners.action(for: .notifications, status: .notDetermined) == .requestAuthorization)
         #expect(PermissionBanners.action(for: .notifications, status: .denied) == .openNotificationSettings)
         #expect(PermissionBanners.action(for: .notifications, status: .granted) == nil)
     }
 
+    @Test func buttonTitleDependsOnStatus() {
+        #expect(PermissionBanners.buttonTitle(for: .screenTime, status: .notDetermined) == "Allow")
+        #expect(PermissionBanners.buttonTitle(for: .screenTime, status: .denied) == "Allow")
+        #expect(PermissionBanners.buttonTitle(for: .notifications, status: .notDetermined) == "Turn On")
+        #expect(PermissionBanners.buttonTitle(for: .notifications, status: .denied) == "Open Settings")
+    }
+
     @Test func copyMatchesTheSpec() {
         #expect(PermissionBanners.message(for: .screenTime)
                 == "Screen Time access needed. Nudge can't track your usage or goals.")
-        #expect(PermissionBanners.buttonTitle(for: .screenTime) == "Allow")
         #expect(PermissionBanners.message(for: .notifications)
                 == "Notifications are off. You won't be alerted when you hit a limit.")
-        #expect(PermissionBanners.buttonTitle(for: .notifications) == "Turn On")
+    }
+}
+
+// MARK: - Shared banner/sheet action (spec §5b)
+
+@MainActor
+private final class URLRecorder {
+    private(set) var opened: [URL] = []
+    func open(_ url: URL) { opened.append(url) }
+}
+
+@Suite("Permission action runner")
+@MainActor
+struct PermissionActionRunnerTests {
+
+    private func makeStore(screenTime: PermissionStatus, notifications: PermissionStatus)
+        async -> (PermissionStatusStore, FakePermissionProvider) {
+        let provider = FakePermissionProvider(screenTime: screenTime, notifications: notifications)
+        let store = PermissionStatusStore(provider: provider)
+        await store.refresh()
+        return (store, provider)
+    }
+
+    @Test func screenTimeAlwaysShowsTheSystemPromptAndNeverOpensSettings() async {
+        for status in [PermissionStatus.notDetermined, .denied] {
+            let (store, provider) = await makeStore(screenTime: status, notifications: .granted)
+            provider.screenTimeAfterRequest = .granted
+            let urls = URLRecorder()
+
+            let result = await PermissionActionRunner.run(.screenTime, requester: store, openURL: urls.open)
+
+            #expect(provider.screenTimeRequests == 1, "\(status)")
+            #expect(urls.opened.isEmpty, "\(status)")
+            #expect(result == .granted, "\(status)")
+        }
+    }
+
+    @Test func undeterminedNotificationsShowTheSystemPrompt() async {
+        let (store, provider) = await makeStore(screenTime: .granted, notifications: .notDetermined)
+        provider.notificationsAfterRequest = .granted
+        let urls = URLRecorder()
+
+        let result = await PermissionActionRunner.run(.notifications, requester: store, openURL: urls.open)
+
+        #expect(provider.notificationRequests == 1)
+        #expect(urls.opened.isEmpty)
+        #expect(result == .granted)
+    }
+
+    @Test func deniedNotificationsOpenTheAppsNotificationSettings() async {
+        let (store, provider) = await makeStore(screenTime: .granted, notifications: .denied)
+        let urls = URLRecorder()
+
+        let result = await PermissionActionRunner.run(.notifications, requester: store, openURL: urls.open)
+
+        #expect(provider.notificationRequests == 0)
+        #expect(urls.opened == [URL(string: UIApplication.openNotificationSettingsURLString)!])
+        #expect(result == .denied)
+    }
+
+    @Test func grantedDoesNothing() async {
+        let (store, provider) = await makeStore(screenTime: .granted, notifications: .granted)
+        let urls = URLRecorder()
+
+        _ = await PermissionActionRunner.run(.screenTime, requester: store, openURL: urls.open)
+        _ = await PermissionActionRunner.run(.notifications, requester: store, openURL: urls.open)
+
+        #expect(provider.screenTimeRequests == 0)
+        #expect(provider.notificationRequests == 0)
+        #expect(urls.opened.isEmpty)
+    }
+}
+
+// MARK: - In-context asks on the Goals tab (spec §5b)
+
+@Suite("Goals permission asks")
+@MainActor
+struct GoalsPermissionAskTests {
+
+    private func makeFlow(screenTime: PermissionStatus, notifications: PermissionStatus)
+        async -> (GoalsSheetFlow, PermissionStatusStore, FakePermissionProvider, URLRecorder) {
+        let provider = FakePermissionProvider(screenTime: screenTime, notifications: notifications)
+        let store = PermissionStatusStore(provider: provider)
+        await store.refresh()
+        let urls = URLRecorder()
+        let flow = GoalsSheetFlow(requester: store, openURL: urls.open)
+        return (flow, store, provider, urls)
+    }
+
+    @Test func copyMatchesTheSpec() {
+        #expect(PermissionAsk.screenTimeForGoals.permission == .screenTime)
+        #expect(PermissionAsk.screenTimeForGoals.message == "Nudge needs Screen Time access to track goals.")
+        #expect(PermissionAsk.notificationsForGoalLimit.permission == .notifications)
+        #expect(PermissionAsk.notificationsForGoalLimit.message
+                == "Turn on notifications so Nudge can alert you when you hit this limit.")
+        #expect(PermissionAsk.notNowTitle == "Not now")
+    }
+
+    // MARK: Add-goal gate
+
+    @Test func addGoalOpensDirectlyWithScreenTimeApproved() async {
+        let (flow, _, _, _) = await makeFlow(screenTime: .granted, notifications: .granted)
+        flow.addGoalTapped()
+        #expect(flow.sheet == .addGoal)
+    }
+
+    @Test func addGoalIsBlockedWithoutScreenTime() async {
+        for status in [PermissionStatus.notDetermined, .denied] {
+            let (flow, _, provider, _) = await makeFlow(screenTime: status, notifications: .granted)
+            flow.addGoalTapped()
+            #expect(flow.sheet == .ask(.screenTimeForGoals), "\(status)")
+            // Asking never prompts by itself.
+            #expect(provider.screenTimeRequests == 0)
+        }
+    }
+
+    @Test func allowPromptsAndContinuesIntoAddGoalOnApproval() async {
+        let (flow, _, provider, urls) = await makeFlow(screenTime: .denied, notifications: .granted)
+        provider.screenTimeAfterRequest = .granted
+        flow.addGoalTapped()
+
+        await flow.primaryTapped()
+
+        #expect(provider.screenTimeRequests == 1)
+        #expect(urls.opened.isEmpty)
+        #expect(flow.sheet == .addGoal)
+    }
+
+    @Test func allowThatIsNotApprovedClosesWithoutOpeningAddGoal() async {
+        let (flow, _, provider, _) = await makeFlow(screenTime: .notDetermined, notifications: .granted)
+        provider.screenTimeAfterRequest = .denied
+        flow.addGoalTapped()
+
+        await flow.primaryTapped()
+
+        #expect(provider.screenTimeRequests == 1)
+        #expect(flow.sheet == nil)
+    }
+
+    @Test func notNowCancelsAndIsNotRemembered() async {
+        let (flow, _, provider, _) = await makeFlow(screenTime: .notDetermined, notifications: .granted)
+        flow.addGoalTapped()
+
+        flow.notNowTapped()
+        #expect(flow.sheet == nil)
+        #expect(provider.screenTimeRequests == 0)
+
+        flow.addGoalTapped()
+        #expect(flow.sheet == .ask(.screenTimeForGoals))
+    }
+
+    // MARK: Post-save notification ask
+
+    @Test func savingWithNotificationsOnJustClosesAddGoal() async {
+        let (flow, _, _, _) = await makeFlow(screenTime: .granted, notifications: .granted)
+        flow.addGoalTapped()
+        flow.goalSaved()
+        #expect(flow.sheet == nil)
+    }
+
+    @Test func savingWithNotificationsOffAsks() async {
+        for status in [PermissionStatus.notDetermined, .denied] {
+            let (flow, _, _, _) = await makeFlow(screenTime: .granted, notifications: status)
+            flow.addGoalTapped()
+            flow.goalSaved()
+            #expect(flow.sheet == .ask(.notificationsForGoalLimit), "\(status)")
+        }
+    }
+
+    @Test func primaryTitleFollowsTheStatus() async {
+        let (undetermined, _, _, _) = await makeFlow(screenTime: .granted, notifications: .notDetermined)
+        #expect(undetermined.primaryTitle(for: .notificationsForGoalLimit) == "Turn On")
+        let (denied, _, _, _) = await makeFlow(screenTime: .denied, notifications: .denied)
+        #expect(denied.primaryTitle(for: .notificationsForGoalLimit) == "Open Settings")
+        #expect(denied.primaryTitle(for: .screenTimeForGoals) == "Allow")
+    }
+
+    @Test func turnOnPromptsForUndeterminedNotifications() async {
+        let (flow, _, provider, urls) = await makeFlow(screenTime: .granted, notifications: .notDetermined)
+        provider.notificationsAfterRequest = .granted
+        flow.addGoalTapped()
+        flow.goalSaved()
+
+        await flow.primaryTapped()
+
+        #expect(provider.notificationRequests == 1)
+        #expect(urls.opened.isEmpty)
+        #expect(flow.sheet == nil)
+    }
+
+    @Test func openSettingsForDeniedNotifications() async {
+        let (flow, _, provider, urls) = await makeFlow(screenTime: .granted, notifications: .denied)
+        flow.addGoalTapped()
+        flow.goalSaved()
+
+        await flow.primaryTapped()
+
+        #expect(provider.notificationRequests == 0)
+        #expect(urls.opened == [URL(string: UIApplication.openNotificationSettingsURLString)!])
+        #expect(flow.sheet == nil)
+    }
+
+    @Test func notNowOnTheNotificationAskJustCloses() async {
+        let (flow, _, provider, urls) = await makeFlow(screenTime: .granted, notifications: .denied)
+        flow.addGoalTapped()
+        flow.goalSaved()
+
+        flow.notNowTapped()
+
+        #expect(flow.sheet == nil)
+        #expect(provider.notificationRequests == 0)
+        #expect(urls.opened.isEmpty)
+
+        // Asked again on the next save.
+        flow.addGoalTapped()
+        flow.goalSaved()
+        #expect(flow.sheet == .ask(.notificationsForGoalLimit))
+    }
+
+    @Test func cancellingAddGoalNeverAsks() async {
+        let (flow, _, _, _) = await makeFlow(screenTime: .granted, notifications: .denied)
+        flow.addGoalTapped()
+        flow.addGoalCancelled()
+        #expect(flow.sheet == nil)
+    }
+
+    @Test func primaryWithNoAskShowingDoesNothing() async {
+        let (flow, _, provider, _) = await makeFlow(screenTime: .notDetermined, notifications: .notDetermined)
+        await flow.primaryTapped()
+        #expect(provider.screenTimeRequests == 0)
+        #expect(provider.notificationRequests == 0)
+        #expect(flow.sheet == nil)
     }
 }

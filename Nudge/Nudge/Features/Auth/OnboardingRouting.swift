@@ -12,25 +12,30 @@ enum OnboardingDestination: Equatable {
 enum OnboardingRouting {
 
     /// 1. Account step pending → profile setup.
-    /// 2. Not completed, or a permission never asked on this device → permissions screen with
-    ///    the `notDetermined` ones. Denied counts as asked (iOS won't re-prompt). Permissions
-    ///    the user skipped this session are left out so "Skip for now" lands in the app.
-    /// 3. Otherwise → the app.
+    /// 2. The permissions page already happened on this device (§5b: at most once per device)
+    ///    → never again, even with a permission still `notDetermined` (the banners and
+    ///    in-context asks cover it). A not-yet-completed account (e.g. a second account on
+    ///    this device) still passes through it with nothing to ask, which just finishes.
+    /// 3. Not completed, or a permission never asked on this device → permissions screen with
+    ///    the `notDetermined` ones. Denied counts as asked (iOS won't re-prompt).
+    /// 4. Otherwise → the app.
     static func destination(
         progress: OnboardingProgress,
         screenTime: PermissionStatus,
         notifications: PermissionStatus,
-        skipped: Set<DevicePermission>
+        permissionsPageDone: Bool
     ) -> OnboardingDestination {
         if progress.nextStep == .profile { return .profileSetup }
+
+        if permissionsPageDone {
+            return progress.completed ? .app : .permissions(pending: [])
+        }
 
         let statuses: [(DevicePermission, PermissionStatus)] = [
             (.screenTime, screenTime),
             (.notifications, notifications),
         ]
-        let pending = statuses
-            .filter { $0.1 == .notDetermined && !skipped.contains($0.0) }
-            .map(\.0)
+        let pending = statuses.filter { $0.1 == .notDetermined }.map(\.0)
 
         if !progress.completed || !pending.isEmpty { return .permissions(pending: pending) }
         return .app

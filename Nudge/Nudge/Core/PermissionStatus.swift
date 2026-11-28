@@ -71,11 +71,19 @@ final class SystemPermissionStatusProvider: PermissionStatusProvider {
     }
 }
 
+/// What the banners and in-context asks need: the current status and a way to show the system
+/// prompt (which refreshes the status). `PermissionStatusStore` in the app; injectable in tests.
+@MainActor
+protocol PermissionRequesting: AnyObject {
+    func status(of permission: DevicePermission) -> PermissionStatus
+    func request(_ permission: DevicePermission) async
+}
+
 /// The current permission statuses, published for routing and the banners. Refreshed on
 /// every return to the foreground (which includes coming back from Settings) and after a
 /// request.
 @MainActor
-final class PermissionStatusStore: ObservableObject {
+final class PermissionStatusStore: ObservableObject, PermissionRequesting {
     @Published private(set) var screenTime: PermissionStatus = .notDetermined
     @Published private(set) var notifications: PermissionStatus = .notDetermined
     /// False until the first refresh, so nothing routes on a guessed status.
