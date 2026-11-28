@@ -10,6 +10,10 @@ struct NudgeApp: App {
     @StateObject private var appState = AppState()
     /// App-level so its sheets sit above RootView and survive its auth-driven branch switches.
     @StateObject private var authRecovery = AuthRecoveryCoordinator()
+    /// The signed-in user's onboarding progress (device copy + outbox; onboarding-progress spec).
+    @StateObject private var onboarding = OnboardingProgressController()
+    /// Screen Time + notification statuses for onboarding routing and the permission banners.
+    @StateObject private var permissions = PermissionStatusStore()
     @Environment(\.scenePhase) private var scenePhase
 
     /// Runs `onForeground` once per trip to the foreground, never twice at once, and
@@ -28,6 +32,8 @@ struct NudgeApp: App {
             RootView()
                 .environmentObject(appState)
                 .environmentObject(appDelegate.pushRouter)
+                .environmentObject(onboarding)
+                .environmentObject(permissions)
                 .task {
                     // Route APNs tokens from the UIKit delegate to the session-aware manager.
                     // The delegate buffers a token that arrives before this runs.
@@ -60,6 +66,11 @@ struct NudgeApp: App {
                 userId: appState.currentUser?.id,
                 perform: onForeground
             )
+            if newPhase == .active {
+                // Cheap local reads, so on every activation: a return from Settings and an
+                // answered system prompt both land here.
+                Task { await permissions.refresh() }
+            }
             if newPhase == .background {
                 // Ask the OS to wake us later to drain any queued nudge triggers.
                 scheduleNudgeTriggerProcessing()
@@ -87,6 +98,11 @@ struct NudgeApp: App {
         // (foregrounded) network context. Runs regardless of the outcome above —
         // triggers already on the queue are still worth sending.
         await NudgeTriggerService().drainPendingTriggers(userId: userId)
+
+        // Last, so it never delays monitoring: queued offline writes (outbox), then the
+        // onboarding device copy (its refresh joins this flush). Neither blocks the UI.
+        await Outbox.shared.flush()?.value
+        await onboarding.refresh()
     }
 
     /// Re-registers monitoring from freshly fetched goals.

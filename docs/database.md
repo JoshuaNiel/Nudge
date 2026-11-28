@@ -68,6 +68,24 @@ Extends Supabase Auth with user-specific settings.
 | timeZone | varchar | IANA timezone string (e.g. `America/Denver`) |
 | settingsLocationLat | double precision | For location-based settings lock |
 | settingsLocationLon | double precision | For location-based settings lock |
+| onboardingCompleted | boolean | `onboarding_completed`, not null, default false (migration 009). Set to true by the app when the user finishes onboarding; never set back to false. Backfilled true for users who had both names. |
+
+#### `public.onboarding_status()` (migration 009)
+`returns jsonb`, `language sql`, `stable`, `security invoker`, `set search_path = ''`. Reads the
+caller's own profile via `auth.uid()` (RLS applies). Executable by `authenticated` only.
+
+```json
+{ "completed": true | false, "next_step": "profile" | null }
+```
+
+- `completed` = `profile.onboarding_completed` (false when the caller has no profile row).
+- `next_step` = the first **account** onboarding step not yet satisfied, in order; `null` when all
+  are satisfied. Today the only step is `"profile"` — satisfied when `first_name` and `last_name`
+  are both non-blank. New steps are added to this function, in order; a step added later does not
+  send users with `completed = true` back into onboarding.
+- The app keeps a per-user device copy of this (plus the names) and mirrors the `next_step` rule
+  on the device; see `docs/specs/onboarding-progress.md`. Device permissions (Screen Time,
+  notifications) are never stored.
 
 ### `app`
 Canonical app registry. Bundle ID is the primary key — no generated integer ID needed.

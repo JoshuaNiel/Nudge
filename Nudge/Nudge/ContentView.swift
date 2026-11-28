@@ -73,4 +73,5 @@ struct ContentView: View {
     ContentView()
         .environmentObject(AppState())
         .environmentObject(PushRouter())
+        .environmentObject(PermissionStatusStore())
 }

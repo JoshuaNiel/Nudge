@@ -37,6 +37,7 @@ struct SocialView: View {
                     friendList
                 }
             }
+            .permissionBanners(for: .friends)
             .navigationTitle("Friends")
             .navigationDestination(for: SocialRoute.self) { route in
                 switch route {
@@ -234,6 +235,7 @@ extension SocialView {
     SocialView()
         .environmentObject(AppState())
         .environmentObject(PushRouter())
+        .environmentObject(PermissionStatusStore())
 }
 
 // MARK: - FriendRow

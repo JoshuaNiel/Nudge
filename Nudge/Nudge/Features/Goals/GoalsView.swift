@@ -22,6 +22,7 @@ struct GoalsView: View {
                     goalList
                 }
             }
+            .permissionBanners(for: .goals)
             .navigationTitle("Goals")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -97,6 +98,7 @@ struct GoalsView: View {
 #Preview {
     GoalsView()
         .environmentObject(AppState())
+        .environmentObject(PermissionStatusStore())
 }
 
 // MARK: - Actions

@@ -3,7 +3,7 @@ import SwiftUI
 /// Full-screen "check your email" step of the signed-out flow (auth-recovery spec C5).
 ///
 /// Shown after a sign-up that awaits confirmation, or a sign-in refused because the email
-/// isn't confirmed. Tapping the emailed link signs in; `OnboardingCoordinator` then moves
+/// isn't confirmed. Tapping the emailed link signs in; `RootView` then moves
 /// past this step on its own, so the view has no "I've confirmed" button.
 struct ConfirmEmailView: View {
     /// A resend found the email already confirmed and signed in.

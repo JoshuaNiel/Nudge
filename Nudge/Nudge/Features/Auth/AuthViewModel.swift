@@ -64,7 +64,7 @@ final class AuthViewModel: ObservableObject {
             case .signUp:
                 if try await service.signUp(email: email, password: password) {
                     // No session yet. The nudge://auth-callback link signs the
-                    // user in; OnboardingCoordinator advances when it does.
+                    // user in; RootView moves on when it does.
                     return .needsEmailConfirmation(pendingConfirmation(.afterSignUp))
                 }
             }

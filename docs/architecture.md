@@ -72,7 +72,21 @@ The Xcode project has `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` set as a build
 Supabase credentials are stored in `Config.xcconfig` (gitignored) and exposed to Swift via Info.plist build setting interpolation. Keys: `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. See `SupabaseClient.swift`.
 
 ### Onboarding Gating
-`RootView` gates the app on two conditions: `AppState.isAuthenticated` (Supabase session) and `onboardingComplete` (persisted via `@AppStorage`). Both must be true to show the main tab view. `OnboardingCoordinator` drives the sequence: tour → auth → profile setup → permissions.
+Spec: `docs/specs/onboarding-progress.md`. `RootView` routes in this order:
+1. Loading, then the account-deleted page.
+2. Signed out → `OnboardingCoordinator` (tour → auth → confirm email).
+3. Signed in → `OnboardingRouting.destination`: profile setup, the permissions screen, or the app.
+
+The decision uses:
+- **Account steps:** a per-user device copy (`OnboardingStore`), refreshed from the server's
+  `onboarding_status()` and the `profile.onboarding_completed` flag. It works offline; writes go
+  through the generic `Outbox`, which flushes on foreground, on reconnect and after an enqueue.
+- **Device steps:** the device's real Screen Time and notification permission status
+  (`PermissionStatusStore`). Only a never-asked permission shows the permissions screen.
+
+After onboarding, `PermissionBanner`s on Dashboard, Goals and Friends cover permissions that are
+off. The old `@AppStorage("onboardingComplete")` flag is read once to migrate existing users,
+then deleted.
 
 ### Session Management
 `AppState` listens to `supabase.auth.authStateChanges` (an `AsyncSequence`) on init. This handles initial session restore, sign-in, sign-out, and token refresh automatically. No manual token management needed.
