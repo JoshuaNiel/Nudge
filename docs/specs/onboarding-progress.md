@@ -125,7 +125,7 @@ re-checked on every real foreground and after returning from Settings.
 
 | Condition | Text | Action | Screens |
 |---|---|---|---|
-| Screen Time not approved | "Screen Time access needed. Nudge can't track your usage or goals." | **Allow**: if `notDetermined`, request authorization; if denied, open the app's Settings page | Dashboard, Goals |
+| Screen Time not approved | "Screen Time access needed. Nudge can't track your usage or goals." | **Allow**: if `notDetermined`, request authorization; if denied, open the app's Settings page | ~~Dashboard,~~ Goals (2026-11-27: the Dashboard shows its own full-screen access state instead; phase-2-dashboard.md D1) |
 | Notifications not authorized (denied or not determined) | "Notifications are off. You won't be alerted when you hit a limit." | **Turn On**: if `notDetermined`, request authorization; if denied, open the app's notification settings | Dashboard, Goals, Friends |
 
 - One reusable `PermissionBanner` view, plus a `PermissionStatusProvider` (protocol, injectable)
@@ -190,6 +190,25 @@ Supersedes the "Skip for now" handling and the banner actions above, where they 
 - Done when: unit tests for the provider publishing a status change from an injected publisher;
   on device, the header is gray on all tabs, the banners sit below it, and revoking Screen Time
   shows its banner.
+
+## 5d. Main-tab header style (user decision 2026-11-27, PR #15 review)
+- **Every main tab** (Dashboard, Apps, Goals, Friends, Settings; and Categories when #22 lands)
+  uses the same header: the compact, inline-height navigation bar (no large title), with the
+  tab's title **left-aligned** at the leading edge in a slightly larger, bold font
+  (`.title3.bold()`, ~20pt, vs. the standard 17pt inline title). The gray bar background from
+  §5c is kept.
+- Implemented once, in the shared `mainTabHeader(title:)` modifier (replacing today's
+  `mainTabHeader()` and each tab's own `.navigationTitle`), so the tabs can't drift apart.
+  The tab's `navigationTitle` is still set (for accessibility, and as the back-button label on
+  pushed screens such as the friend screen), but the centered system title is not shown.
+- On iOS 26, the leading title must not render inside a Liquid Glass toolbar-item bubble (hide
+  the shared item background there).
+- Trailing toolbar buttons (Dashboard Refresh, Goals +, Friends +, etc.) stay where they are.
+- **Not affected:** pushed screens (friend screen) and sheets keep the standard centered inline
+  title.
+- Done when: on device, all five tabs show the same compact gray header with a left-aligned
+  larger title; the friend screen's back button still reads "Friends"; VoiceOver reads each
+  tab's title as a header.
 
 ## 6. Edge cases
 - **Sign-in on a device with someone else's queued writes:** those stay queued and untouched.

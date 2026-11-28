@@ -188,7 +188,7 @@ struct NudgeUsageReport: DeviceActivityReportScene {
 
 | Condition | What to show |
 |---|---|
-| No Screen Time permission | "Screen Time access required" with Settings deep link |
+| No Screen Time permission | "Screen Time access required" full-screen state with an **Allow** button (system prompt) — see 2026-11-27 decisions |
 | No monitoring registered (Phase 1 not set up) | "Usage tracking not active" |
 | Day with no usage data | "No usage recorded for this day" |
 | Extension loading | SwiftUI renders the extension async — show a `ProgressView` until the extension provides its view |
@@ -219,10 +219,72 @@ struct NudgeUsageReport: DeviceActivityReportScene {
 - **Bar:** `seconds / totalSeconds`, clamped to `0...1`; any non-zero fraction renders at least 2pt; never wider than the track.
 - **Empty state:** shown when `totalSeconds == 0` — copy "No usage recorded for this day".
 - **Day range:** today back to 30 days before today (31 selectable days); `<` disabled at the earliest day, `>` disabled on today. Selection is stored as a start of day and re-clamped on foreground so it stays valid across midnight. Title: "Today", "Yesterday", or a localized month-day (`"Apr 14"` in en_US).
-- **Refresh is a toolbar button, not pull-to-refresh.** The report is a remote view rendered by another process: touches inside it never reach a host `ScrollView`, so `.refreshable` would only respond to drags on the thin day-navigator strip. The report also scrolls itself, and nesting it in a host scroll view would require a fixed height the host cannot know. The report is additionally refreshed every time the app returns to the foreground. The report's `.id` is keyed on (day, refreshId).
-- **Authorization:** `.approved` and (iOS 26.4+) `.approvedWithDataAccess` both count as authorized; anything else shows "Screen Time access required" with an Open Settings button.
+- **Refresh is a toolbar button, not pull-to-refresh.** The report is a remote view rendered by another process: touches inside it never reach a host `ScrollView`, so `.refreshable` would only respond to drags on the thin day-navigator strip. The report also scrolls itself, and nesting it in a host scroll view would require a fixed height the host cannot know. The report is additionally refreshed every time the app returns to the foreground (narrowed 2026-11-27, D3 below). The report's `.id` is keyed on (day, refreshId).
+- **Authorization:** ~~`.approved` and (iOS 26.4+) `.approvedWithDataAccess` both count as authorized; anything else shows "Screen Time access required" with an Open Settings button.~~ Superseded 2026-11-27 (D1, D2 below).
 - **Monitoring not registered:** "Usage tracking not active" with a Check Again button. Because the app registers monitoring asynchronously on foreground (after a network fetch), the dashboard also re-checks every 2s, up to 5 times, while in this state.
 - **Loading:** a `ProgressView` sits behind the report; the extension's view has an opaque background that covers it once drawn.
 - **Devices filter:** left at the default (`DeviceActivityFilter` with no explicit devices). With `.individual` authorization only this device's data is reported.
 - **Extension isolation:** the `NudgeActivityReport` struct is `@MainActor` — scenes are main-actor isolated (ExtensionKit's `AppExtensionScene`) while the SDK leaves `DeviceActivityReportExtension.body` unannotated, which otherwise warns (an error in Swift 6 mode).
 - **Cleanup:** no hidden `DeviceActivityReport`, `PendingUsageEntry` or `UsageSyncService` remained in code; nothing to remove. ADR-044 and ADR-047 describe the abandoned App Group sync and are now historical.
+
+---
+
+## Implementation Decisions (2026-11-27, user review of PR #15 after merging #26)
+
+These supersede the 2026-11-14 notes above where they differ. The 2026-11-14 notes were agent
+judgment calls; the user may revisit any of them.
+
+### D1. No Screen Time access: one full-screen state, no banner
+- When Screen Time is not granted, the Dashboard shows only the full-screen
+  `ContentUnavailableView`: "Screen Time access required", text "Nudge needs Screen Time access
+  to show your usage.", and an **Allow** button.
+- **Allow** runs the shared Screen Time request (`PermissionActionRunner`, onboarding-progress
+  §5b): always the system prompt (`requestAuthorization(for: .individual)`), whatever the
+  current status. Never opens Settings. The "Open Settings" button and `openSettings()` are removed.
+- The **Screen Time banner no longer appears on the Dashboard** (onboarding-progress §5 table is
+  updated: Screen Time banner → Goals only). The **notifications banner still shows on the
+  Dashboard**, above whatever state the Dashboard is in, including this one.
+- In this state the day navigator and the toolbar Refresh button are hidden (as today).
+
+### D2. Screen Time status comes from the shared `PermissionStatusStore`
+- `DashboardAvailability` resolves from the store's `screenTime: PermissionStatus` (which
+  includes the live `AuthorizationCenter` observation and the monitoring-proved revoke
+  override) instead of reading `AuthorizationCenter.shared.authorizationStatus` itself. The
+  Dashboard and the banners therefore never disagree.
+- New resolver: `resolve(screenTime: PermissionStatus, isLoaded: Bool, isMonitoringActive: Bool)`:
+  - `!isLoaded` → `.loading` (a plain `ProgressView`; avoids flashing the access screen on a
+    cold start before the first status read);
+  - `screenTime != .granted` → `.needsAuthorization`;
+  - otherwise `.ready` or `.trackingInactive` from `DeviceActivityCenter().activities` as today.
+- Remove `DashboardAvailability.isAuthorized(_:)`; `PermissionStatus(screenTime:)` already maps
+  `.approvedWithDataAccess` and later approval kinds to `.granted`.
+- Availability is re-evaluated whenever the store's `screenTime`/`isLoaded` change (not only on
+  foreground), so granting via **Allow** or a revoke detected mid-session updates the screen
+  immediately. The existing `trackingInactive` re-check (every 2s, up to 5 times) still covers
+  the gap while #26's re-register-after-approval registers monitoring.
+
+### D3. Automatic refresh only on a real return to the app
+- The automatic refresh (re-check availability, re-clamp the day across midnight, rebuild the
+  report) runs only when the scene becomes `.active` **after having been `.background`** — the
+  same rule as `ForegroundSync`. Bounces through `.inactive` (the Screen Time and notification
+  prompts, Face ID, Control Center, notification center) do not refresh.
+- The decision of "is this a real foreground?" is a small pure, tested type (or reuse of an
+  existing one) — not ad-hoc state in the view.
+- Additionally, the report is refreshed once when availability transitions **into** `.ready`
+  (e.g. right after Screen Time is granted and monitoring registers).
+- The toolbar Refresh button is unchanged.
+
+### D4. Main-tab header style — see onboarding-progress §5d
+The Dashboard keeps the compact (inline-height) bar; the title moves to the leading edge in a
+larger font, and all main tabs adopt the same style.
+
+### Done when (2026-11-27)
+- **Unit tests:** `DashboardAvailability.resolve` for every combination of (isLoaded,
+  screenTime ∈ notDetermined/denied/granted, isMonitoringActive); the real-foreground rule
+  (background→active refreshes; inactive→active does not; first active after launch counts);
+  refresh-on-transition-into-ready; banner visibility tables updated (Screen Time banner on
+  Goals only; notifications banner on Dashboard, Goals, Friends).
+- **On device:** with Screen Time revoked, the Dashboard shows only the full-screen state (no
+  Screen Time banner), Allow shows the system prompt, and approving brings the report back
+  without leaving the app; pulling down Control Center and dismissing it does not reload the
+  report; returning from another app does.
