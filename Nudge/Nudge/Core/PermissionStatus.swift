@@ -43,11 +43,25 @@ protocol PermissionStatusProvider: AnyObject {
     func notificationStatus() async -> PermissionStatus
     func requestScreenTimeAuthorization() async
     func requestNotificationAuthorization() async
+    /// Screen Time changes the system pushes (e.g. revoked in Settings), so the status stays
+    /// fresh between foreground refreshes (spec §5c). Emits only real changes.
+    var screenTimeStatusChanges: AnyPublisher<PermissionStatus, Never> { get }
 }
 
 /// Production provider: FamilyControls `AuthorizationCenter` and `UNUserNotificationCenter`.
 @MainActor
 final class SystemPermissionStatusProvider: PermissionStatusProvider {
+
+    let screenTimeStatusChanges: AnyPublisher<PermissionStatus, Never>
+
+    /// `authorizationStatus` is injectable for tests; the app observes `AuthorizationCenter`.
+    init(authorizationStatus: AnyPublisher<AuthorizationStatus, Never> =
+            AuthorizationCenter.shared.$authorizationStatus.eraseToAnyPublisher()) {
+        screenTimeStatusChanges = authorizationStatus
+            .map(PermissionStatus.init(screenTime:))
+            .removeDuplicates()
+            .eraseToAnyPublisher()
+    }
 
     func screenTimeStatus() -> PermissionStatus {
         PermissionStatus(screenTime: AuthorizationCenter.shared.authorizationStatus)
@@ -80,8 +94,8 @@ protocol PermissionRequesting: AnyObject {
 }
 
 /// The current permission statuses, published for routing and the banners. Refreshed on
-/// every return to the foreground (which includes coming back from Settings) and after a
-/// request.
+/// every return to the foreground (which includes coming back from Settings), after a
+/// request, and whenever the system pushes a Screen Time change.
 @MainActor
 final class PermissionStatusStore: ObservableObject, PermissionRequesting {
     @Published private(set) var screenTime: PermissionStatus = .notDetermined
@@ -90,10 +104,20 @@ final class PermissionStatusStore: ObservableObject, PermissionRequesting {
     @Published private(set) var isLoaded = false
 
     private let provider: PermissionStatusProvider
+    private var screenTimeObservation: AnyCancellable?
 
-    init() { self.provider = SystemPermissionStatusProvider() }
+    convenience init() { self.init(provider: SystemPermissionStatusProvider()) }
 
-    init(provider: PermissionStatusProvider) { self.provider = provider }
+    init(provider: PermissionStatusProvider) {
+        self.provider = provider
+        // The system may publish off the main thread; the store is main-actor state.
+        screenTimeObservation = provider.screenTimeStatusChanges
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in
+                guard let self, self.screenTime != status else { return }
+                self.screenTime = status
+            }
+    }
 
     func status(of permission: DevicePermission) -> PermissionStatus {
         switch permission {

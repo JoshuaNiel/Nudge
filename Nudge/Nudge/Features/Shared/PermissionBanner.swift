@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 // Post-onboarding permission banners (docs/specs/onboarding-progress.md §5): compact,
-// non-dismissible, at the top of the affected screens.
+// non-dismissible, first in the page content of the affected screens, below the header (§5c).
 
 enum PermissionBannerScreen {
     case dashboard, goals, friends
@@ -115,16 +115,16 @@ struct PermissionBannerStack: View {
                                         notifications: permissions.notifications)
             : []
         if !visible.isEmpty {
-            VStack(spacing: 8) {
+            VStack(spacing: 12) {
                 ForEach(visible, id: \.self) { permission in
                     PermissionBanner(permission: permission, status: permissions.status(of: permission)) {
                         perform(for: permission)
                     }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(.bar)
+            .padding(.horizontal, 24)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
         }
     }
 }
@@ -140,10 +140,13 @@ extension PermissionBannerStack {
 }
 
 extension View {
-    /// Pins the permission banners for `screen` under the navigation bar.
+    /// Puts the permission banners for `screen` first in the page content, below the
+    /// navigation bar (spec §5c), above whatever the screen shows (content, empty, loading or
+    /// error state), which fills the rest. Nothing is added when no banner applies.
     func permissionBanners(for screen: PermissionBannerScreen) -> some View {
-        safeAreaInset(edge: .top, spacing: 0) {
+        VStack(spacing: 0) {
             PermissionBannerStack(screen: screen)
+            frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }

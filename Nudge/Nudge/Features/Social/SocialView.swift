@@ -39,6 +39,7 @@ struct SocialView: View {
             }
             .permissionBanners(for: .friends)
             .navigationTitle("Friends")
+            .mainTabHeader()
             .navigationDestination(for: SocialRoute.self) { route in
                 switch route {
                 case .friend(let id):

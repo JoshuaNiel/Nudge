@@ -13,6 +13,7 @@ struct DashboardView: View {
             )
             .permissionBanners(for: .dashboard)
             .navigationTitle("Dashboard")
+            .mainTabHeader()
         }
     }
 }

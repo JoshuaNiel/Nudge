@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Combine
 import FamilyControls
 import UserNotifications
 import UIKit
@@ -17,6 +18,9 @@ private final class FakePermissionProvider: PermissionStatusProvider {
     var notificationsAfterRequest: PermissionStatus?
     private(set) var screenTimeRequests = 0
     private(set) var notificationRequests = 0
+    /// Pushes a Screen Time change, as `AuthorizationCenter` does (spec §5c).
+    let screenTimeSubject = PassthroughSubject<PermissionStatus, Never>()
+    var screenTimeStatusChanges: AnyPublisher<PermissionStatus, Never> { screenTimeSubject.eraseToAnyPublisher() }
 
     init(screenTime: PermissionStatus, notifications: PermissionStatus) {
         self.screenTime = screenTime
@@ -105,6 +109,42 @@ struct PermissionStatusStoreTests {
         #expect(store.notifications == .denied)
         #expect(store.status(of: .screenTime) == .granted)
         #expect(store.status(of: .notifications) == .denied)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aPushedScreenTimeChangeUpdatesTheStoreWithoutARefresh() async {
+        let provider = FakePermissionProvider(screenTime: .granted, notifications: .granted)
+        let store = PermissionStatusStore(provider: provider)
+        await store.refresh()
+
+        // Revoked in Settings: the system publishes it, no foreground refresh happens.
+        provider.screenTimeSubject.send(.denied)
+
+        let updated = await store.$screenTime.values.first { $0 == .denied }
+        #expect(updated == .denied)
+        #expect(store.notifications == .granted)
+    }
+}
+
+// MARK: - System provider (spec §5c)
+
+@Suite("SystemPermissionStatusProvider")
+@MainActor
+struct SystemPermissionStatusProviderTests {
+
+    @Test func republishesScreenTimeChangesFromTheInjectedPublisher() {
+        let system = PassthroughSubject<AuthorizationStatus, Never>()
+        let provider = SystemPermissionStatusProvider(authorizationStatus: system.eraseToAnyPublisher())
+        var received: [PermissionStatus] = []
+        let cancellable = provider.screenTimeStatusChanges.sink { received.append($0) }
+
+        system.send(.notDetermined)
+        system.send(.denied)
+        system.send(.denied)
+        system.send(.approved)
+
+        #expect(received == [.notDetermined, .denied, .granted])
+        cancellable.cancel()
     }
 }
 
