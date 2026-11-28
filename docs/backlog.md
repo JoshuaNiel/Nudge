@@ -10,6 +10,7 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 
 ## Future Features
 
+- **Offline-first across the app (major; needs its own spec and decisions round).** The user wants everything usable offline: save on the device, sync to the server when connected. Build on the outbox from the onboarding-progress PR (`docs/specs/onboarding-progress.md` §3.2). Needs: a local store per data type (goals, categories, friends, nudge history, settings, whys; likely SwiftData), queued writes for every mutation, a conflict policy per field (last-write-wins vs merge), handling for ids a server assigns after an offline create, a sync status in the UI, and realtime reconciliation. (User request 2026-11-27.)
 - **Monthly goals.** Not feasible with one monitoring interval, since intervals can't exceed a week (ADR-060). It could be approximated by chaining weekly intervals with carried-over usage, but carry-over can't be measured precisely.
 - **Per-friend trigger configuration.** Choose which trigger types each friend receives (e.g. Mom gets the daily report only). Needs a `friend_trigger` junction table `(friend_id, trigger_type, enabled)` next to `nudge_settings` (ADR-062), plus per-friend UI.
 - **Mac sync.** Sync goals across Mac using the same Supabase backend.
