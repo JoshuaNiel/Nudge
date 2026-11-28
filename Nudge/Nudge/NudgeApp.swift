@@ -23,6 +23,9 @@ struct NudgeApp: App {
     /// Runs `onForeground` once per trip to the foreground, never twice at once, and
     /// defers it until the user is known on a cold start (auth race).
     @State private var foregroundSync = ForegroundSync()
+    /// Single-flight gate for the monitoring refresh, shared by the foreground sync and an
+    /// in-app Screen Time approval (device finding C).
+    @State private var monitoringRefresh = MonitoringRefreshCoordinator()
 
     private let monitoringService = MonitoringRegistrationService()
     private let goalService = GoalService()
@@ -64,6 +67,12 @@ struct NudgeApp: App {
                 .onOpenURL { url in
                     Task { await authRecovery.handleOpenURL(url) }
                 }
+                // An in-app Screen Time approval (banner, add-goal ask, permissions page)
+                // re-registers monitoring now rather than on the next foreground.
+                .onReceive(permissions.screenTimeApprovals) {
+                    guard let userId = appState.currentUser?.id else { return }
+                    monitoringRefresh.request(userId: userId, force: true, perform: refreshMonitoring)
+                }
         }
         .onChange(of: scenePhase) { _, newPhase in
             foregroundSync.scenePhaseChanged(
@@ -97,7 +106,7 @@ struct NudgeApp: App {
         // each foreground keeps the stored token fresh (APNs may rotate it).
         await PushRegistration.registerIfAuthorized()
 
-        await refreshMonitoring(userId: userId)
+        await monitoringRefresh.request(userId: userId, force: false, perform: refreshMonitoring).value
 
         // Strategy 2: flush any queued nudge triggers now that we're in a reliable
         // (foregrounded) network context. Runs regardless of the outcome above —
@@ -110,7 +119,9 @@ struct NudgeApp: App {
         await onboarding.refresh()
     }
 
-    /// Re-registers monitoring from freshly fetched goals.
+    /// Re-registers monitoring from freshly fetched goals. Called through
+    /// `monitoringRefresh` only. `force` (an in-app Screen Time approval) registers even when
+    /// the stored registration looks fresh.
     ///
     /// Both fetches must succeed before touching `DeviceActivityCenter`. A failed
     /// request used to arrive here as an empty goal list, indistinguishable from
@@ -118,7 +129,16 @@ struct NudgeApp: App {
     /// disarmed every trigger until the next successful foreground (ADR-054).
     /// Leaving yesterday's registration in place is strictly safer than replacing it
     /// with one built from data we do not have.
-    private func refreshMonitoring(userId: UUID) async {
+    private func refreshMonitoring(userId: UUID, force: Bool) async {
+        // Checked first (local reads, before the fetches), so an offline foreground still
+        // notices. Not on a forced run: that follows an approval, and the activities are
+        // expected to be gone until it re-registers.
+        let lapsed = !force && monitoringService.activitiesLapsedSinceRegisteringToday()
+        if lapsed {
+            // FamilyControls keeps the launch-time status in-process and, on device, a revoke
+            // throws nothing; monitoring registered earlier today vanishing is the signal.
+            permissions.recordMonitoringOutcome(.notNeeded, activitiesLapsedToday: true)
+        }
         guard await appState.fetchAndCacheProfile(userId: userId) else {
             NudgeApp.logger.error("profile fetch failed — leaving existing monitoring registration untouched")
             return
@@ -129,11 +149,11 @@ struct NudgeApp: App {
         }
         let outcome = monitoringService.refreshMonitoring(
             goals: goals,
-            sessionTimeoutMinutes: appState.sessionTimeoutMinutes
+            sessionTimeoutMinutes: appState.sessionTimeoutMinutes,
+            force: force
         )
-        // FamilyControls keeps the launch-time status in-process, so a Screen Time revoke
-        // made while Nudge runs surfaces only here, as an unauthorized registration.
-        permissions.recordMonitoringOutcome(outcome)
+        // `startMonitoring` throwing `.unauthorized` is the other (documented) revoke signal.
+        permissions.recordMonitoringOutcome(outcome, activitiesLapsedToday: lapsed)
     }
 
     // MARK: - Background Tasks

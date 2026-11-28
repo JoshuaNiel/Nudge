@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import os
 
 // Post-onboarding permission banners (docs/specs/onboarding-progress.md §5): compact,
 // non-dismissible, first in the page content of the affected screens, below the header (§5c).
@@ -114,22 +115,30 @@ struct PermissionBannerStack: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        let visible = permissions.isLoaded
-            ? PermissionBanners.visible(on: screen, screenTime: permissions.screenTime,
-                                        notifications: permissions.notifications)
-            : []
-        if !visible.isEmpty {
-            VStack(spacing: PermissionBanners.contentSpacing) {
-                ForEach(visible, id: \.self) { permission in
-                    PermissionBanner(permission: permission, status: permissions.status(of: permission)) {
-                        perform(for: permission)
-                    }
+        let visible = visibleBanners
+        // Always present (zero height when empty), so the visibility log below sees every change.
+        VStack(spacing: PermissionBanners.contentSpacing) {
+            ForEach(visible, id: \.self) { permission in
+                PermissionBanner(permission: permission, status: permissions.status(of: permission)) {
+                    perform(for: permission)
                 }
             }
-            .padding(.horizontal, 24)
-            // No bottom padding: the content's own top margin (see `permissionBanners`) is the gap.
-            .padding(.top, PermissionBanners.contentSpacing)
         }
+        .padding(.horizontal, 24)
+        // No bottom padding: the content's own top margin (see `permissionBanners`) is the gap.
+        .padding(.top, visible.isEmpty ? 0 : PermissionBanners.contentSpacing)
+        .onChange(of: visible) { _, newValue in
+            PermissionLog.logger.log("""
+                banners on \(String(describing: screen), privacy: .public): \
+                \(newValue.isEmpty ? "none" : newValue.map(\.rawValue).joined(separator: ", "), privacy: .public)
+                """)
+        }
+    }
+
+    private var visibleBanners: [DevicePermission] {
+        guard permissions.isLoaded else { return [] }
+        return PermissionBanners.visible(on: screen, screenTime: permissions.screenTime,
+                                         notifications: permissions.notifications)
     }
 }
 

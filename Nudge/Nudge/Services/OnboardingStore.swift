@@ -11,10 +11,19 @@ protocol OnboardingProgressStoring: AnyObject {
 /// sign-out (a re-sign-in on this device works offline); removed on account deletion.
 final class OnboardingStore: OnboardingProgressStoring {
     private let defaults: UserDefaults
+    /// The persistent domain `defaults` writes to, when known (the app's bundle id for
+    /// `.standard`). Lets `hasAnyCompletedCopy` read only this app's keys.
+    private let domainName: String?
 
-    init() { self.defaults = .standard }
+    init() {
+        self.defaults = .standard
+        self.domainName = Bundle.main.bundleIdentifier
+    }
 
-    init(defaults: UserDefaults) { self.defaults = defaults }
+    init(defaults: UserDefaults, domainName: String? = nil) {
+        self.defaults = defaults
+        self.domainName = domainName
+    }
 
     func load(for userId: UUID) -> OnboardingProgress? {
         guard let data = defaults.data(forKey: AppStorageKeys.onboardingProgress(for: userId)) else { return nil }
@@ -32,9 +41,13 @@ final class OnboardingStore: OnboardingProgressStoring {
 
     /// Whether any user's copy on this device says onboarding is completed. Used once, to
     /// recognize an existing device when `permissionsPageShown` was never recorded.
+    ///
+    /// Reads only the app's own domain when known: `dictionaryRepresentation()` also loads and
+    /// merges the global and other search-list domains, on the main thread at launch.
     func hasAnyCompletedCopy() -> Bool {
         let decoder = JSONDecoder()
-        return defaults.dictionaryRepresentation().contains { key, value in
+        let entries = domainName.flatMap(defaults.persistentDomain(forName:)) ?? defaults.dictionaryRepresentation()
+        return entries.contains { key, value in
             guard key.hasPrefix(AppStorageKeys.onboardingProgressPrefix), let data = value as? Data else { return false }
             return (try? decoder.decode(OnboardingProgress.self, from: data))?.completed == true
         }

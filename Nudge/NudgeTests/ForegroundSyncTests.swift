@@ -163,3 +163,86 @@ struct ForegroundSyncTests {
         #expect(recorder.runs.count == 2)
     }
 }
+
+// MARK: - MonitoringRefreshCoordinator (device finding C)
+//
+// The monitoring refresh (profile + goals fetch, then registration) has two triggers: the
+// foreground sync and an in-app Screen Time approval. Approval forces a re-registration; both
+// share one single-flight gate so two refreshes never run at once.
+
+@MainActor
+private final class RefreshRecorder {
+    private(set) var runs: [(userId: UUID, force: Bool)] = []
+    var holdRuns = false
+    private var held: [CheckedContinuation<Void, Never>] = []
+
+    var work: MonitoringRefreshCoordinator.Work {
+        { [self] userId, force in
+            runs.append((userId, force))
+            if holdRuns {
+                await withCheckedContinuation { held.append($0) }
+            }
+        }
+    }
+
+    func releaseAll() {
+        let pending = held
+        held = []
+        pending.forEach { $0.resume() }
+    }
+}
+
+@Suite("MonitoringRefreshCoordinator")
+@MainActor
+struct MonitoringRefreshCoordinatorTests {
+
+    private let user = UUID()
+
+    @Test func aRequestRunsOnceWithItsForceFlag() async {
+        let recorder = RefreshRecorder()
+        let coordinator = MonitoringRefreshCoordinator()
+
+        await coordinator.request(userId: user, force: true, perform: recorder.work).value
+
+        #expect(recorder.runs.count == 1)
+        #expect(recorder.runs.first?.force == true)
+        #expect(!coordinator.isRunning)
+    }
+
+    /// An approval during a foreground refresh (which may already have fetched and skipped
+    /// registration) must still re-register: it runs once more, forced, after the current run.
+    @Test func aForcedRequestDuringARunRunsAgainAfterIt() async {
+        let recorder = RefreshRecorder()
+        recorder.holdRuns = true
+        let coordinator = MonitoringRefreshCoordinator()
+
+        let first = coordinator.request(userId: user, force: false, perform: recorder.work)
+        await Task.yield()
+        let joined = coordinator.request(userId: user, force: true, perform: recorder.work)
+        #expect(recorder.runs.count == 1)
+
+        recorder.holdRuns = false
+        recorder.releaseAll()
+        await first.value
+        await joined.value
+
+        #expect(recorder.runs.map(\.force) == [false, true])
+    }
+
+    /// A plain request during a run joins it: the running refresh already covers it.
+    @Test func anUnforcedRequestDuringARunJoinsIt() async {
+        let recorder = RefreshRecorder()
+        recorder.holdRuns = true
+        let coordinator = MonitoringRefreshCoordinator()
+
+        let first = coordinator.request(userId: user, force: false, perform: recorder.work)
+        await Task.yield()
+        _ = coordinator.request(userId: user, force: false, perform: recorder.work)
+
+        recorder.holdRuns = false
+        recorder.releaseAll()
+        await first.value
+
+        #expect(recorder.runs.count == 1)
+    }
+}

@@ -258,6 +258,124 @@ struct ScreenTimeMonitoringSignalTests {
     }
 }
 
+// MARK: - Screen Time revoke: monitoring lapsed today (device finding B)
+
+/// On device a revoke throws nothing: `startMonitoring` succeeds and `AuthorizationCenter` keeps
+/// reporting approved. Monitoring registered earlier today being gone is the signal.
+@Suite("Screen Time revoked: monitoring lapsed today")
+@MainActor
+struct ScreenTimeLapseSignalTests {
+
+    private func makeGrantedStore() async -> (PermissionStatusStore, FakePermissionProvider) {
+        let provider = FakePermissionProvider(screenTime: .granted, notifications: .granted)
+        let store = PermissionStatusStore(provider: provider)
+        await store.refresh()
+        return (store, provider)
+    }
+
+    @Test func aLapseMarksScreenTimeDeniedEvenWhenRegistrationSucceeds() async {
+        let (store, _) = await makeGrantedStore()
+
+        store.recordMonitoringOutcome(.registered, activitiesLapsedToday: true)
+
+        #expect(store.screenTime == .denied)
+        #expect(store.notifications == .granted)
+    }
+
+    /// A registration "succeeds" while revoked, so it is not proof of access for this signal.
+    @Test func aLaterRegistrationDoesNotClearALapseDenial() async {
+        let (store, provider) = await makeGrantedStore()
+        store.recordMonitoringOutcome(.registered, activitiesLapsedToday: true)
+
+        store.recordMonitoringOutcome(.registered)
+        store.recordMonitoringOutcome(.notNeeded)
+        await store.refresh()
+        provider.screenTimeSubject.send(.granted)
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+
+        #expect(store.screenTime == .denied)
+    }
+
+    @Test func noLapseChangesNothing() async {
+        let (store, _) = await makeGrantedStore()
+
+        store.recordMonitoringOutcome(.registered, activitiesLapsedToday: false)
+        store.recordMonitoringOutcome(.notNeeded, activitiesLapsedToday: false)
+
+        #expect(store.screenTime == .granted)
+    }
+
+    @Test func anInAppApprovalClearsALapseDenial() async {
+        let (store, provider) = await makeGrantedStore()
+        store.recordMonitoringOutcome(.notNeeded, activitiesLapsedToday: true)
+        provider.screenTimeAfterRequest = .granted
+
+        await store.request(.screenTime)
+
+        #expect(store.screenTime == .granted)
+    }
+
+    @Test func aDeclinedRequestKeepsALapseDenial() async {
+        let (store, provider) = await makeGrantedStore()
+        store.recordMonitoringOutcome(.notNeeded, activitiesLapsedToday: true)
+        provider.screenTimeRequestThrows = true
+
+        await store.request(.screenTime)
+
+        #expect(store.screenTime == .denied)
+    }
+}
+
+// MARK: - Approval triggers re-registration (device finding C)
+
+@Suite("Screen Time approval event")
+@MainActor
+struct ScreenTimeApprovalEventTests {
+
+    private func count(_ store: PermissionStatusStore, during work: () async -> Void) async -> Int {
+        var received = 0
+        let subscription = store.screenTimeApprovals.sink { received += 1 }
+        await work()
+        subscription.cancel()
+        return received
+    }
+
+    @Test func anApprovedRequestEmitsOnce() async {
+        let provider = FakePermissionProvider(screenTime: .notDetermined, notifications: .granted)
+        provider.screenTimeAfterRequest = .granted
+        let store = PermissionStatusStore(provider: provider)
+
+        let received = await count(store) { await store.request(.screenTime) }
+
+        #expect(received == 1)
+    }
+
+    @Test func aDeclinedOrNotApprovedRequestDoesNotEmit() async {
+        let provider = FakePermissionProvider(screenTime: .notDetermined, notifications: .granted)
+        provider.screenTimeRequestThrows = true
+        let store = PermissionStatusStore(provider: provider)
+        let declined = await count(store) { await store.request(.screenTime) }
+
+        provider.screenTimeRequestThrows = false
+        provider.screenTimeAfterRequest = .denied
+        let notApproved = await count(store) { await store.request(.screenTime) }
+
+        #expect(declined == 0)
+        #expect(notApproved == 0)
+    }
+
+    @Test func aNotificationRequestDoesNotEmit() async {
+        let provider = FakePermissionProvider(screenTime: .granted, notifications: .notDetermined)
+        let store = PermissionStatusStore(provider: provider)
+
+        let received = await count(store) { await store.request(.notifications) }
+
+        #expect(received == 0)
+    }
+}
+
 // MARK: - System provider (spec §5c)
 
 @Suite("SystemPermissionStatusProvider")

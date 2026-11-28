@@ -51,6 +51,17 @@ struct RootView: View {
             .task {
                 if !permissions.isLoaded { await permissions.refresh() }
             }
+            // The name saved in profile setup shows at once, offline too (device finding D);
+            // the server profile replaces it once it has one.
+            .onChange(of: deviceFirstName, initial: true) { _, name in
+                appState.setDeviceFirstName(name)
+            }
+    }
+
+    /// The signed-in user's first name from their onboarding device copy.
+    private var deviceFirstName: String? {
+        guard onboarding.userId == appState.currentUser?.id else { return nil }
+        return onboarding.progress?.firstName
     }
 
     @ViewBuilder

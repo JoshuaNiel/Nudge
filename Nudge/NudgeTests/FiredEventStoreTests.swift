@@ -189,3 +189,28 @@ struct FiredEventStorePruneTests {
         #expect(defaults.object(forKey: AppGroupKeys.firedKey(day: "2026-01-01")) == nil)
     }
 }
+
+// MARK: - pruneIfNeeded (once per day)
+
+@Suite("FiredEventStore.pruneIfNeeded")
+@MainActor
+struct FiredEventStorePruneOncePerDayTests {
+
+    @Test func prunesOnFirstCallOfTheDayOnly() {
+        let defaults = isolatedDefaults()
+        let store = FiredEventStore(defaults: defaults)
+
+        #expect(store.pruneIfNeeded(keepingDaysFrom: utcDate(2026, 11, 23, 8), calendar: utcCalendar()))
+        store.markFired("total@3600", onDay: "2026-10-01")
+        #expect(!store.pruneIfNeeded(keepingDaysFrom: utcDate(2026, 11, 23, 20), calendar: utcCalendar()))
+        #expect(defaults.object(forKey: AppGroupKeys.firedKey(day: "2026-10-01")) != nil)
+
+        #expect(store.pruneIfNeeded(keepingDaysFrom: utcDate(2026, 11, 24, 8), calendar: utcCalendar()))
+        #expect(defaults.object(forKey: AppGroupKeys.firedKey(day: "2026-10-01")) == nil)
+    }
+
+    /// The stamp must sit outside the fired-key prefix, or a prune would delete it.
+    @Test func stampIsOutsideTheFiredPrefix() {
+        #expect(!AppGroupKeys.firedPruneDay.hasPrefix(AppGroupKeys.firedKeyPrefix))
+    }
+}

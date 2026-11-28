@@ -18,7 +18,8 @@ import FamilyControls
 enum MonitoringRefreshOutcome {
     /// The current registration is fresh; `DeviceActivityCenter` was not called.
     case notNeeded
-    /// `startMonitoring` succeeded, so Screen Time is authorized right now.
+    /// `startMonitoring` succeeded. Clears an `.unauthorized` denial, but is not proof of
+    /// access on its own: on device it also succeeds right after a revoke (finding B).
     case registered
     /// `startMonitoring` threw. The error is passed through unchanged from `DeviceActivityCenter`.
     case failed(Error)
@@ -68,18 +69,33 @@ class MonitoringRegistrationService {
         print("[MonitoringService] startMonitoring succeeded, \(count) events registered")
     }
 
+    /// Whether monitoring registered earlier today is gone, the on-device sign that Screen
+    /// Time access was removed (see `MonitoringPlan.activitiesLapsedSinceRegisteringToday`).
+    /// Local reads only, so the foreground refresh checks it before any network fetch and an
+    /// offline foreground still detects a revoke.
+    func activitiesLapsedSinceRegisteringToday(now: Date = Date(), calendar: Calendar = .current) -> Bool {
+        let defaults = UserDefaults(suiteName: AppGroupKeys.suiteName)
+        return MonitoringPlan.activitiesLapsedSinceRegisteringToday(
+            isMonitoringActive: !center.activities.isEmpty,
+            lastDay: defaults?.string(forKey: AppGroupKeys.lastRegisteredDay),
+            today: MonitoringPlan.dayStamp(for: now, calendar: calendar)
+        )
+    }
+
     /// Foreground entry point. Re-registers only when something makes the current
     /// registration stale: monitoring lapsed, the calendar day rolled over, or the
-    /// goal set changed. Returns what happened, so the caller can report an unauthorized
-    /// failure to `PermissionStatusStore`.
+    /// goal set changed. `force` skips that check (an in-app Screen Time approval: after a
+    /// revoke the stamps can look fresh while the registration is not). Returns what
+    /// happened, so the caller can report an unauthorized failure to `PermissionStatusStore`.
     ///
     /// A revoked Screen Time permission clears every activity, so `needed` is true and this
-    /// attempts (and fails) one registration per foreground. That is bounded: `register`
-    /// restores the stamps on failure and nothing retries until the next foreground.
+    /// attempts one registration per foreground. That is bounded: `register` restores the
+    /// stamps on failure and nothing retries until the next foreground.
     @discardableResult
     func refreshMonitoring(
         goals: [GoalSummary],
         sessionTimeoutMinutes: Int?,
+        force: Bool = false,
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> MonitoringRefreshOutcome {
@@ -90,19 +106,21 @@ class MonitoringRegistrationService {
         )
         let today = MonitoringPlan.dayStamp(for: now, calendar: calendar)
         let signature = MonitoringPlan.signature(for: summaries)
+        // One read each: `activities` asks the system, and the stamps are App Group reads.
+        let activeCount = center.activities.count
+        let lastDay = defaults?.string(forKey: AppGroupKeys.lastRegisteredDay)
 
-        let needed = MonitoringPlan.shouldRegister(
-            isMonitoringActive: !center.activities.isEmpty,
-            lastDay: defaults?.string(forKey: AppGroupKeys.lastRegisteredDay),
+        let needed = force || MonitoringPlan.shouldRegister(
+            isMonitoringActive: activeCount > 0,
+            lastDay: lastDay,
             lastSignature: defaults?.string(forKey: AppGroupKeys.lastRegisteredSignature),
             today: today,
             signature: signature
         )
 
         print("""
-        [MonitoringService] refreshMonitoring — active: \(center.activities.count), \
-        today: \(today), lastDay: \(defaults?.string(forKey: AppGroupKeys.lastRegisteredDay) ?? "nil"), \
-        needed: \(needed)
+        [MonitoringService] refreshMonitoring — active: \(activeCount), \
+        today: \(today), lastDay: \(lastDay ?? "nil"), force: \(force), needed: \(needed)
         """)
 
         guard needed else { return .notNeeded }

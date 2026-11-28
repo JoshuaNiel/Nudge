@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import FamilyControls
 import UserNotifications
+import os
 
 // Device permissions (docs/specs/onboarding-progress.md §1, §5). Never stored: read from the
 // system, so each device is checked on its own.
@@ -35,6 +36,20 @@ enum PermissionStatus: Equatable {
         @unknown default: self = .granted
         }
     }
+
+    /// For logs (no user data).
+    var logName: String {
+        switch self {
+        case .notDetermined: "notDetermined"
+        case .denied: "denied"
+        case .granted: "granted"
+        }
+    }
+}
+
+/// Logs for permission refreshes, the Screen Time override and banner visibility.
+enum PermissionLog {
+    static let logger = Logger(subsystem: "com.joshuaqn.Nudge", category: "Permissions")
 }
 
 /// Reads and requests the system permissions. Injectable; tests use a fake.
@@ -104,26 +119,38 @@ protocol PermissionRequesting: AnyObject {
 /// every return to the foreground (which includes coming back from Settings), after a
 /// request, and whenever the system pushes a Screen Time change.
 ///
-/// Screen Time also has a second source: monitoring registration. FamilyControls caches the
-/// authorization status per process, so after a revoke in Settings `AuthorizationCenter`
-/// keeps reporting approved until a relaunch, while `startMonitoring` already throws
-/// `.unauthorized`. `recordMonitoringOutcome` turns that into a denial that overrides the
-/// cached status until a later registration succeeds or a request is approved.
+/// Screen Time also has a second source: monitoring. FamilyControls caches the authorization
+/// status per process, so after a revoke in Settings `AuthorizationCenter` (and its publisher)
+/// keeps reporting approved until a relaunch. Two monitoring signals override that cached
+/// status with a denial (`ScreenTimeOverride`):
+/// - `startMonitoring` throwing `.unauthorized` (cleared by a later successful registration);
+/// - monitoring registered earlier today being gone (device finding B: on device a revoke
+///   throws nothing and registration succeeds again, so only an approval clears this one).
+/// An approved in-app request clears either. In memory only: a relaunch reads a fresh status.
 @MainActor
 final class PermissionStatusStore: ObservableObject, PermissionRequesting {
+    /// Why monitoring overrides the cached system status with a denial.
+    enum ScreenTimeOverride: String {
+        case monitoringUnauthorized
+        case monitoringLapsed
+    }
+
     /// What the banners and routing use: the system status, unless monitoring proved it stale.
     @Published private(set) var screenTime: PermissionStatus = .notDetermined
     @Published private(set) var notifications: PermissionStatus = .notDetermined
     /// False until the first refresh, so nothing routes on a guessed status.
     @Published private(set) var isLoaded = false
 
+    /// Emits after an in-app Screen Time request is approved, so the app re-registers
+    /// monitoring right away instead of on the next foreground (device finding C).
+    var screenTimeApprovals: AnyPublisher<Void, Never> { approvalSubject.eraseToAnyPublisher() }
+
     private let provider: PermissionStatusProvider
     private var screenTimeObservation: AnyCancellable?
+    private let approvalSubject = PassthroughSubject<Void, Never>()
     /// The last status `AuthorizationCenter` reported (possibly cached; see the type comment).
     private var systemScreenTime: PermissionStatus = .notDetermined
-    /// Set when monitoring failed as unauthorized; cleared by a successful registration or an
-    /// approved request. In memory only: a relaunch reads a fresh status anyway.
-    private var monitoringReportedUnauthorized = false
+    private var screenTimeOverride: ScreenTimeOverride?
 
     convenience init() { self.init(provider: SystemPermissionStatusProvider()) }
 
@@ -134,6 +161,7 @@ final class PermissionStatusStore: ObservableObject, PermissionRequesting {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] status in
                 guard let self else { return }
+                PermissionLog.logger.log("Screen Time status pushed by the system: \(status.logName, privacy: .public)")
                 self.systemScreenTime = status
                 self.publishScreenTime()
             }
@@ -147,12 +175,19 @@ final class PermissionStatusStore: ObservableObject, PermissionRequesting {
     }
 
     func refresh() async {
+        PermissionLog.logger.log("permission refresh started")
         systemScreenTime = provider.screenTimeStatus()
         let notifications = await provider.notificationStatus()
         publishScreenTime()
         // Assign only real changes: each @Published write re-renders every observer.
         if self.notifications != notifications { self.notifications = notifications }
         if !isLoaded { isLoaded = true }
+        PermissionLog.logger.log("""
+            permission refresh finished — screenTime: \(self.screenTime.logName, privacy: .public) \
+            (system \(self.systemScreenTime.logName, privacy: .public), \
+            override \(self.screenTimeOverride?.rawValue ?? "none", privacy: .public)), \
+            notifications: \(notifications.logName, privacy: .public)
+            """)
     }
 
     func request(_ permission: DevicePermission) async {
@@ -160,33 +195,52 @@ final class PermissionStatusStore: ObservableObject, PermissionRequesting {
         case .screenTime:
             let approved = await provider.requestScreenTimeAuthorization()
             // A request that returned without throwing and reads approved is a real, fresh
-            // approval (unlike the cached status), so it ends a monitoring-reported denial.
-            if approved && provider.screenTimeStatus() == .granted {
-                monitoringReportedUnauthorized = false
-            }
+            // approval (unlike the cached status), so it ends any monitoring-reported denial.
+            let isApproval = approved && provider.screenTimeStatus() == .granted
+            PermissionLog.logger.log("Screen Time request finished — approved: \(isApproval, privacy: .public)")
+            if isApproval { setOverride(nil, reason: "in-app approval") }
+            await refresh()
+            if isApproval { approvalSubject.send() }
         case .notifications:
             await provider.requestNotificationAuthorization()
+            await refresh()
         }
-        await refresh()
     }
 
-    /// The monitoring path's Screen Time signal (see the type comment). Only
-    /// `DeviceActivityCenter.MonitoringError.unauthorized` marks Screen Time denied; a
-    /// successful registration proves access and clears it; anything else changes nothing.
-    func recordMonitoringOutcome(_ outcome: MonitoringRefreshOutcome) {
-        switch outcome {
-        case .registered:
-            monitoringReportedUnauthorized = false
-        case .failed where outcome.isScreenTimeUnauthorized:
-            monitoringReportedUnauthorized = true
-        case .failed, .notNeeded:
+    /// The monitoring path's Screen Time signals (see the type comment).
+    /// - `activitiesLapsedToday`: monitoring registered earlier today was gone before this
+    ///   refresh (`MonitoringRegistrationService.activitiesLapsedSinceRegisteringToday`).
+    /// - `outcome`: only `DeviceActivityCenter.MonitoringError.unauthorized` marks Screen Time
+    ///   denied; a successful registration clears that denial (not a lapse); anything else
+    ///   changes nothing.
+    func recordMonitoringOutcome(_ outcome: MonitoringRefreshOutcome, activitiesLapsedToday: Bool = false) {
+        if activitiesLapsedToday {
+            setOverride(.monitoringLapsed, reason: "monitoring registered today is gone")
             return
+        }
+        switch outcome {
+        case .registered where screenTimeOverride == .monitoringUnauthorized:
+            setOverride(nil, reason: "monitoring registered")
+        case .failed where outcome.isScreenTimeUnauthorized:
+            setOverride(.monitoringUnauthorized, reason: "startMonitoring threw unauthorized")
+        case .registered, .failed, .notNeeded:
+            return
+        }
+    }
+
+    private func setOverride(_ override: ScreenTimeOverride?, reason: String) {
+        guard screenTimeOverride != override else { return }
+        screenTimeOverride = override
+        if let override {
+            PermissionLog.logger.notice("Screen Time override set: \(override.rawValue, privacy: .public) — \(reason, privacy: .public)")
+        } else {
+            PermissionLog.logger.notice("Screen Time override cleared — \(reason, privacy: .public)")
         }
         publishScreenTime()
     }
 
     private func publishScreenTime() {
-        let effective = monitoringReportedUnauthorized ? .denied : systemScreenTime
+        let effective = screenTimeOverride != nil ? .denied : systemScreenTime
         // Assign only real changes: each @Published write re-renders every observer.
         if screenTime != effective { screenTime = effective }
     }

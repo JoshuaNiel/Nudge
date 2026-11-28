@@ -663,3 +663,39 @@ struct OnboardingProgressControllerTests {
         #expect(outbox.pendingWrites(for: otherUser).count == 1)
     }
 }
+
+// MARK: - Displayed first name (device finding D)
+
+/// Profile setup saves the name to the device copy (works offline); the server profile is the
+/// source of truth once it has a name.
+@Suite("AppState displayed first name")
+@MainActor
+struct DisplayedFirstNameTests {
+
+    @Test func theDeviceNameShowsBeforeTheServerAnswers() {
+        #expect(AppState.resolveFirstName(server: nil, device: "Ada") == "Ada")
+    }
+
+    /// Online, but the queued name write hasn't reached the server yet.
+    @Test func theDeviceNameShowsWhileTheServerHasNone() {
+        #expect(AppState.resolveFirstName(server: "", device: "Ada") == "Ada")
+    }
+
+    @Test func theServerNameWinsWhenItHasOne() {
+        #expect(AppState.resolveFirstName(server: "Grace", device: "Ada") == "Grace")
+        #expect(AppState.resolveFirstName(server: "Grace", device: nil) == "Grace")
+    }
+
+    @Test func blankDeviceNamesAreIgnored() {
+        #expect(AppState.resolveFirstName(server: nil, device: "  ") == "")
+        #expect(AppState.resolveFirstName(server: nil, device: nil) == "")
+    }
+
+    @Test func savingOfflineUpdatesTheDisplayedNameImmediately() {
+        let appState = AppState(observesAuth: false, appGroup: nil)
+
+        appState.setDeviceFirstName(" Ada ")
+
+        #expect(appState.userFirstName == "Ada")
+    }
+}
