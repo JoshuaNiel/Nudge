@@ -475,26 +475,55 @@ struct DashboardDayTests {
 
 // MARK: - Availability
 
+/// Phase 2 D2 (2026-11-27): availability resolves from the shared `PermissionStatusStore`'s
+/// Screen Time status, plus whether monitoring is registered.
 @Suite("DashboardAvailability")
 @MainActor
 struct DashboardAvailabilityTests {
 
-    @Test func unauthorizedWinsOverInactiveMonitoring() {
-        #expect(DashboardAvailability.resolve(isAuthorized: false, isMonitoringActive: false) == .needsAuthorization)
-        #expect(DashboardAvailability.resolve(isAuthorized: false, isMonitoringActive: true) == .needsAuthorization)
+    private let statuses: [PermissionStatus] = [.notDetermined, .denied, .granted]
+
+    /// Before the store's first refresh nothing is known, whatever it currently holds.
+    @Test func notLoadedIsLoadingForEveryInput() {
+        for status in statuses {
+            for monitoring in [false, true] {
+                #expect(DashboardAvailability.resolve(screenTime: status, isLoaded: false,
+                                                      isMonitoringActive: monitoring) == .loading,
+                        "\(status) monitoring \(monitoring)")
+            }
+        }
     }
 
-    @Test func authorizedButNotMonitoringIsInactive() {
-        #expect(DashboardAvailability.resolve(isAuthorized: true, isMonitoringActive: false) == .trackingInactive)
+    @Test func notGrantedNeedsAuthorizationEvenWhileMonitoring() {
+        for status in [PermissionStatus.notDetermined, .denied] {
+            for monitoring in [false, true] {
+                #expect(DashboardAvailability.resolve(screenTime: status, isLoaded: true,
+                                                      isMonitoringActive: monitoring) == .needsAuthorization,
+                        "\(status) monitoring \(monitoring)")
+            }
+        }
     }
 
-    @Test func authorizedAndMonitoringIsReady() {
-        #expect(DashboardAvailability.resolve(isAuthorized: true, isMonitoringActive: true) == .ready)
+    @Test func grantedButNotMonitoringIsInactive() {
+        #expect(DashboardAvailability.resolve(screenTime: .granted, isLoaded: true,
+                                              isMonitoringActive: false) == .trackingInactive)
     }
 
-    @Test func onlyApprovedStatusesCountAsAuthorized() {
-        #expect(DashboardAvailability.isAuthorized(.approved))
-        #expect(!DashboardAvailability.isAuthorized(.denied))
-        #expect(!DashboardAvailability.isAuthorized(.notDetermined))
+    @Test func grantedAndMonitoringIsReady() {
+        #expect(DashboardAvailability.resolve(screenTime: .granted, isLoaded: true,
+                                              isMonitoringActive: true) == .ready)
+    }
+
+    /// D3: the report is rebuilt once when it becomes showable (e.g. right after Screen Time
+    /// is granted and monitoring registers), never while it stays showable or stays hidden.
+    @Test func refreshesOnlyOnTransitionIntoReady() {
+        let all: [DashboardAvailability] = [.loading, .needsAuthorization, .trackingInactive, .ready]
+        for from in all {
+            for to in all {
+                let expected = to == .ready && from != .ready
+                #expect(DashboardAvailability.shouldRefreshOnTransition(from: from, to: to) == expected,
+                        "\(from) -> \(to)")
+            }
+        }
     }
 }

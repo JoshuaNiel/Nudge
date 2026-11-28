@@ -37,8 +37,7 @@ private struct GoalsScreen: View {
                 }
             }
             .permissionBanners(for: .goals)
-            .navigationTitle("Goals")
-            .mainTabHeader()
+            .mainTabHeader(title: "Goals")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { sheetFlow.addGoalTapped() } label: {

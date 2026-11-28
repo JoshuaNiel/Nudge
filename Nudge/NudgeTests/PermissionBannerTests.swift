@@ -406,13 +406,16 @@ struct PermissionBannerTests {
 
     private let statuses: [PermissionStatus] = [.notDetermined, .denied, .granted]
 
-    @Test func screenTimeBannerShowsOnDashboardAndGoalsWhenNotApproved() {
+    /// The Dashboard shows its own full-screen access state instead (phase-2-dashboard.md D1).
+    @Test func screenTimeBannerShowsOnGoalsOnlyWhenNotApproved() {
+        #expect(PermissionBanners.screens(for: .screenTime) == [.goals])
         for status in statuses {
-            for screen in [PermissionBannerScreen.dashboard, .goals] {
-                let visible = PermissionBanners.visible(on: screen, screenTime: status, notifications: .granted)
-                #expect(visible == (status == .granted ? [] : [.screenTime]), "\(screen) \(status)")
+            let visible = PermissionBanners.visible(on: .goals, screenTime: status, notifications: .granted)
+            #expect(visible == (status == .granted ? [] : [.screenTime]), "goals \(status)")
+            for screen in [PermissionBannerScreen.dashboard, .friends] {
+                #expect(PermissionBanners.visible(on: screen, screenTime: status, notifications: .granted).isEmpty,
+                        "\(screen) \(status)")
             }
-            #expect(PermissionBanners.visible(on: .friends, screenTime: status, notifications: .granted).isEmpty)
         }
     }
 
@@ -426,8 +429,11 @@ struct PermissionBannerTests {
     }
 
     @Test func bothBannersStackScreenTimeFirst() {
-        #expect(PermissionBanners.visible(on: .dashboard, screenTime: .denied, notifications: .notDetermined)
+        #expect(PermissionBanners.screens(for: .notifications) == [.dashboard, .goals, .friends])
+        #expect(PermissionBanners.visible(on: .goals, screenTime: .denied, notifications: .notDetermined)
                 == [.screenTime, .notifications])
+        #expect(PermissionBanners.visible(on: .dashboard, screenTime: .denied, notifications: .notDetermined)
+                == [.notifications])
         #expect(PermissionBanners.visible(on: .friends, screenTime: .denied, notifications: .notDetermined)
                 == [.notifications])
     }

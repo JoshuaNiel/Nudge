@@ -246,3 +246,42 @@ struct MonitoringRefreshCoordinatorTests {
         #expect(recorder.runs.count == 1)
     }
 }
+
+// MARK: - ForegroundGate (the shared "real foreground" rule)
+//
+// Used by ForegroundSync and the Dashboard's automatic refresh (phase-2-dashboard.md D3): only
+// a return from `.background` counts; bounces through `.inactive` (system prompts, Face ID,
+// Control Center) do not.
+
+@Suite("ForegroundGate")
+@MainActor
+struct ForegroundGateTests {
+
+    /// Feeds `phases` to a fresh gate and returns its answer for each.
+    private func answers(_ phases: [ScenePhase]) -> [Bool] {
+        var gate = ForegroundGate()
+        return phases.map { gate.scenePhaseChanged(to: $0) }
+    }
+
+    @Test func firstActiveAfterLaunchCounts() {
+        #expect(answers([.active]) == [true])
+    }
+
+    @Test func firstActiveAfterAnInitialInactiveStillCounts() {
+        #expect(answers([.inactive, .active]) == [false, true])
+    }
+
+    /// Control Center, Face ID, the Screen Time and notification prompts.
+    @Test func inactiveBounceIsNotARealForeground() {
+        #expect(answers([.active, .inactive, .active]) == [true, false, false])
+    }
+
+    @Test func returnFromBackgroundIsARealForeground() {
+        #expect(answers([.active, .inactive, .background, .inactive, .active])
+                == [true, false, false, false, true])
+    }
+
+    @Test func repeatedActiveCountsOnce() {
+        #expect(answers([.active, .active]) == [true, false])
+    }
+}

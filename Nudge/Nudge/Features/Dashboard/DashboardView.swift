@@ -1,6 +1,5 @@
 import SwiftUI
 import DeviceActivity
-import FamilyControls
 
 /// Phase 2 dashboard: day navigation chrome around a `DeviceActivityReport`.
 ///
@@ -13,12 +12,16 @@ import FamilyControls
 /// `ScrollView`, so a `.refreshable` container would only respond to drags on the
 /// thin chrome above it. The report also scrolls itself, and nesting it inside a
 /// host scroll view would need a fixed height the host cannot know. A toolbar
-/// button (plus an automatic refresh on every return to the foreground) is
+/// button (plus an automatic refresh on every real return to the app) is
 /// reliable instead.
+///
+/// Screen Time status comes from the shared `PermissionStatusStore`, so the Dashboard and
+/// the permission banners never disagree (docs/specs/phase-2-dashboard.md D2).
 struct DashboardView: View {
     // Environment
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
+    @EnvironmentObject private var permissions: PermissionStatusStore
 
     // Local state
     /// Always a start of day within `DashboardDay`'s selectable range.
@@ -26,7 +29,13 @@ struct DashboardView: View {
     /// Changing this rebuilds the report view, which relaunches the extension's
     /// `makeConfiguration` with fresh data.
     @State private var refreshId = UUID()
-    @State private var availability = DashboardAvailability.current()
+    /// Resolved on appear and whenever the store's Screen Time status changes.
+    @State private var availability = DashboardAvailability.loading
+    /// Only a return from the background refreshes automatically, not an `.inactive`
+    /// bounce such as Control Center or a system prompt (D3).
+    @State private var foregroundGate = ForegroundGate()
+    /// The Screen Time prompt is up; blocks a second request from a double tap.
+    @State private var isRequestingScreenTime = false
 
     private struct ReportIdentity: Hashable {
         let day: Date
@@ -41,10 +50,9 @@ struct DashboardView: View {
     var body: some View {
         NavigationStack {
             content
+                // Notifications banner only; no Screen Time banner here (D1).
                 .permissionBanners(for: .dashboard)
-                .navigationTitle("Dashboard")
-                .navigationBarTitleDisplayMode(.inline)
-                .mainTabHeader()
+                .mainTabHeader(title: "Dashboard")
                 .toolbar {
                     if availability == .ready {
                         ToolbarItem(placement: .topBarTrailing) {
@@ -55,10 +63,17 @@ struct DashboardView: View {
                     }
                 }
         }
-        .onChange(of: scenePhase) { _, newPhase in
-            guard newPhase == .active else { return }
+        .onAppear(perform: updateAvailability)
+        // `initial`: the view usually first appears while the scene is already active. Feeding
+        // that phase to the gate consumes the launch foreground, so a later `.inactive` bounce
+        // is never taken for it.
+        .onChange(of: scenePhase, initial: true) { _, newPhase in
+            guard foregroundGate.scenePhaseChanged(to: newPhase) else { return }
             onForeground()
         }
+        // A grant via Allow, a revoke detected mid-session, or the first status read (D2).
+        .onChange(of: permissions.screenTime) { updateAvailability() }
+        .onChange(of: permissions.isLoaded) { updateAvailability() }
         .task(id: availability) {
             await recheckWhileTrackingInactive()
         }
@@ -67,14 +82,19 @@ struct DashboardView: View {
     @ViewBuilder
     private var content: some View {
         switch availability {
+        case .loading:
+            // Before the first status read: no access screen flash on a cold start (D2).
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .needsAuthorization:
             ContentUnavailableView {
                 Label("Screen Time access required", systemImage: "hourglass.badge.plus")
             } description: {
-                Text("Nudge needs Screen Time access to show your usage. You can turn it on in Settings.")
+                Text("Nudge needs Screen Time access to show your usage.")
             } actions: {
-                Button("Open Settings", action: openSettings)
+                Button("Allow", action: requestScreenTime)
                     .buttonStyle(.borderedProminent)
+                    .disabled(isRequestingScreenTime)
             }
         case .trackingInactive:
             ContentUnavailableView {
@@ -168,10 +188,9 @@ extension DashboardView {
         refreshId = UUID()
     }
 
-    /// Re-evaluates access and data on every return to the app: the user may have
-    /// granted access in Settings, monitoring may have just been registered, and
-    /// the usage shown is otherwise stale. Re-clamping also keeps the selection
-    /// valid across midnight.
+    /// Re-evaluates access and data on every real return to the app (D3): monitoring may
+    /// have just been registered, and the usage shown is otherwise stale. Re-clamping also
+    /// keeps the selection valid across midnight.
     private func onForeground() {
         updateAvailability()
         selectedDay = DashboardDay.clamp(selectedDay, today: Date(), calendar: .current)
@@ -180,8 +199,12 @@ extension DashboardView {
 
     // MARK: - Availability
 
+    /// Also rebuilds the report once when it becomes showable (D3).
     private func updateAvailability() {
-        availability = DashboardAvailability.current()
+        let next = DashboardAvailability.current(screenTime: permissions.screenTime,
+                                                 isLoaded: permissions.isLoaded)
+        if DashboardAvailability.shouldRefreshOnTransition(from: availability, to: next) { refresh() }
+        availability = next
     }
 
     /// Bounded re-check while monitoring is not yet registered; stops as soon as
@@ -196,8 +219,17 @@ extension DashboardView {
         }
     }
 
-    private func openSettings() {
-        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-        openURL(url)
+    // MARK: - Screen Time access
+
+    /// The shared Screen Time request: always the system prompt, never Settings
+    /// (onboarding-progress §5b; D1). The store publishes the outcome, which updates
+    /// `availability` through `onChange`.
+    private func requestScreenTime() {
+        guard !isRequestingScreenTime else { return }
+        isRequestingScreenTime = true
+        Task {
+            await PermissionActionRunner.run(.screenTime, requester: permissions, openURL: { openURL($0) })
+            isRequestingScreenTime = false
+        }
     }
 }

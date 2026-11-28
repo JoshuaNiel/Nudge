@@ -33,9 +33,11 @@ enum PermissionBanners {
         return result
     }
 
+    /// The Dashboard has no Screen Time banner: it shows its own full-screen access state
+    /// (docs/specs/phase-2-dashboard.md D1).
     static func screens(for permission: DevicePermission) -> Set<PermissionBannerScreen> {
         switch permission {
-        case .screenTime: [.dashboard, .goals]
+        case .screenTime: [.goals]
         case .notifications: [.dashboard, .goals, .friends]
         }
     }
