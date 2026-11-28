@@ -10,7 +10,7 @@ import Foundation
 /// re-registration. Without this store each of those would re-send the friend SMS.
 ///
 /// Compiled into both the app and the monitor extension (`Shared/`). The extension
-/// writes it from `eventDidReachThreshold`; `MonitoringPlan.register` prunes it.
+/// writes it from `eventDidReachThreshold`; `MonitoringPlan.register` prunes it (once a day).
 ///
 /// Storage: `AppGroupKeys.firedKey(day:)` → JSON-encoded sorted `[String]` of dedup
 /// keys. An unreadable value reads as empty — the worst case is one duplicate
@@ -93,6 +93,20 @@ struct FiredEventStore {
                 defaults.removeObject(forKey: key)
             }
         }
+    }
+
+    /// `prune`, at most once per local day (stamped in `AppGroupKeys.firedPruneDay`).
+    /// `prune` enumerates every key in the domain (`dictionaryRepresentation()`, which also
+    /// loads the app and global domains), and registration runs on every foreground that
+    /// needs it, so doing it once a day keeps that scan off the common path. Returns whether
+    /// it pruned.
+    @discardableResult
+    func pruneIfNeeded(keepingDaysFrom today: Date, calendar: Calendar) -> Bool {
+        let day = MonitoringPlan.dayStamp(for: today, calendar: calendar)
+        guard defaults.string(forKey: AppGroupKeys.firedPruneDay) != day else { return false }
+        prune(keepingDaysFrom: today, calendar: calendar)
+        defaults.set(day, forKey: AppGroupKeys.firedPruneDay)
+        return true
     }
 
     // MARK: - Private

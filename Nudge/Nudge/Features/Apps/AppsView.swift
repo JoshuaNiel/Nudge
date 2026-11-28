@@ -5,6 +5,7 @@ struct AppsView: View {
         NavigationStack {
             Text("Apps coming soon")
                 .navigationTitle("Apps")
+                .mainTabHeader()
         }
     }
 }

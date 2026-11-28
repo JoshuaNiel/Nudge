@@ -31,7 +31,9 @@ protocol LocalSessionEnding {
 /// 2. Wipe the App Group — JWT, anon key, friends, goals, pending triggers, registration
 ///    stamps and FamilyActivitySelection blobs — so nothing of the deleted user remains for
 ///    the extension to read.
-/// 3. Reset `onboardingComplete` so a new account goes through onboarding.
+/// 3. Remove the deleted user's on-device data outside the App Group: their onboarding
+///    progress copy and their queued outbox writes (read the user id before the session ends).
+///    Also remove the legacy device-wide `onboardingComplete` flag, if an old build left one.
 /// 4. End the session last. That emits `.signedOut`, which flips `AppState` to
 ///    unauthenticated (and resets `PushTokenManager`'s in-memory upload state); RootView
 ///    then shows the auth flow.
@@ -48,6 +50,8 @@ final class AccountCleanupService: AccountCleanupProtocol {
     private let appGroupSuiteName: String
     private let appGroupDefaults: UserDefaults?
     private let appStorage: UserDefaults
+    private let userLocalData: UserLocalDataClearing
+    private let currentUserId: () -> UUID?
     private let session: LocalSessionEnding
 
     // Production init — real DeviceActivityCenter, App Group suite, and Supabase session.
@@ -56,6 +60,8 @@ final class AccountCleanupService: AccountCleanupProtocol {
         self.appGroupSuiteName = AppGroupKeys.suiteName
         self.appGroupDefaults = UserDefaults(suiteName: AppGroupKeys.suiteName)
         self.appStorage = .standard
+        self.userLocalData = OnboardingLocalDataClearer()
+        self.currentUserId = { supabase.auth.currentUser?.id }
         self.session = SupabaseLocalSession()
     }
 
@@ -65,18 +71,25 @@ final class AccountCleanupService: AccountCleanupProtocol {
         appGroupSuiteName: String,
         appGroupDefaults: UserDefaults?,
         appStorage: UserDefaults,
+        userLocalData: UserLocalDataClearing,
+        currentUserId: @escaping () -> UUID?,
         session: LocalSessionEnding
     ) {
         self.monitoring = monitoring
         self.appGroupSuiteName = appGroupSuiteName
         self.appGroupDefaults = appGroupDefaults
         self.appStorage = appStorage
+        self.userLocalData = userLocalData
+        self.currentUserId = currentUserId
         self.session = session
     }
 
     func performPostDeletionCleanup() async {
         monitoring.stopAllMonitoring()
         wipeAppGroup()
+        if let userId = currentUserId() {
+            userLocalData.clearLocalData(for: userId)
+        }
         appStorage.removeObject(forKey: AppStorageKeys.onboardingComplete)
         await session.endLocalSession()
     }

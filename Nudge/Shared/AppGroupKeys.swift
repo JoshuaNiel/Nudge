@@ -51,6 +51,11 @@ enum AppGroupKeys {
         "\(firedKeyPrefix)\(day)"
     }
 
+    /// Local day ("yyyy-MM-dd") of the last `FiredEventStore` prune. The prune scans the
+    /// whole App Group domain, so it runs at most once per day. Deliberately outside
+    /// `firedKeyPrefix`, so the prune never deletes it.
+    static let firedPruneDay = "nudge.maintenance.firedPruneDay"
+
     // MARK: - Sync flags
     /// Set by DeviceActivityMonitor.intervalDidEnd; cleared by main app on next foreground.
     static let midnightSyncNeeded = "nudge.sync.midnightNeeded"

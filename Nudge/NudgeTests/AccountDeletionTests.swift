@@ -392,13 +392,13 @@ struct RootViewScreenTests {
         isLoading: Bool = false,
         showsDeleted: Bool = false,
         isAuthenticated: Bool = true,
-        onboardingComplete: Bool = true
+        destination: OnboardingDestination? = .app
     ) -> RootView.Screen {
         RootView.screen(
             isLoading: isLoading,
             isShowingAccountDeleted: showsDeleted,
             isAuthenticated: isAuthenticated,
-            onboardingComplete: onboardingComplete
+            destination: destination
         )
     }
 
@@ -406,9 +406,18 @@ struct RootViewScreenTests {
         #expect(screen() == .main)
     }
 
-    @Test func signedOutOrNotOnboardedShowsOnboarding() {
+    @Test func signedOutShowsOnboarding() {
         #expect(screen(isAuthenticated: false) == .onboarding)
-        #expect(screen(onboardingComplete: false) == .onboarding)
+        #expect(screen(isAuthenticated: false, destination: nil) == .onboarding)
+    }
+
+    @Test func signedInDestinationsMapToTheirScreens() {
+        #expect(screen(destination: .profileSetup) == .profileSetup)
+        #expect(screen(destination: .permissions(pending: [.notifications])) == .permissions(pending: [.notifications]))
+    }
+
+    @Test func signedInWithUnknownProgressWaits() {
+        #expect(screen(destination: nil) == .loading)
     }
 
     @Test func loadingShowsTheSpinner() {
@@ -416,11 +425,12 @@ struct RootViewScreenTests {
     }
 
     /// No tour flash: the page wins over every auth / onboarding combination the cleanup
-    /// passes through (still signed in → onboarding reset → signed out).
+    /// passes through (still signed in → onboarding copy cleared → signed out).
     @Test func accountDeletedPageWinsOverAuthAndOnboardingState() {
+        let destinations: [OnboardingDestination?] = [nil, .profileSetup, .permissions(pending: []), .app]
         for auth in [true, false] {
-            for onboarded in [true, false] {
-                #expect(screen(showsDeleted: true, isAuthenticated: auth, onboardingComplete: onboarded) == .accountDeleted)
+            for destination in destinations {
+                #expect(screen(showsDeleted: true, isAuthenticated: auth, destination: destination) == .accountDeleted)
             }
         }
     }
@@ -431,12 +441,12 @@ struct RootViewScreenTests {
 struct OnboardingCoordinatorStartTests {
 
     @Test func defaultStartIsTheTour() {
-        let coordinator = OnboardingCoordinator(onboardingComplete: .constant(false))
+        let coordinator = OnboardingCoordinator()
         #expect(coordinator.initialStep == .tour)
     }
 
     @Test func canStartAtAuth() {
-        let coordinator = OnboardingCoordinator(onboardingComplete: .constant(false), startingAt: .auth)
+        let coordinator = OnboardingCoordinator(startingAt: .auth)
         #expect(coordinator.initialStep == .auth)
     }
 }
@@ -655,6 +665,7 @@ struct AccountCleanupServiceTests {
     private let appStorageSuite: String
     private let appStorage: UserDefaults
     private let log = CallLog()
+    private let deletedUser = UUID()
 
     init() {
         appGroupSuite = "AccountCleanupTests.group.\(UUID().uuidString)"
@@ -666,14 +677,20 @@ struct AccountCleanupServiceTests {
         appStorage.removePersistentDomain(forName: appStorageSuite)
     }
 
-    private func makeService() -> (AccountCleanupService, MockMonitoringStopper, MockLocalSession) {
+    private func makeService(
+        userLocalData: MockUserLocalData? = nil,
+        currentUserId: UUID?? = nil
+    ) -> (AccountCleanupService, MockMonitoringStopper, MockLocalSession) {
         let monitoring = MockMonitoringStopper(log: log)
         let session = MockLocalSession(log: log, appGroup: appGroup, suite: appGroupSuite)
+        let userId = currentUserId ?? deletedUser
         let service = AccountCleanupService(
             monitoring: monitoring,
             appGroupSuiteName: appGroupSuite,
             appGroupDefaults: appGroup,
             appStorage: appStorage,
+            userLocalData: userLocalData ?? MockUserLocalData(log: log),
+            currentUserId: { userId },
             session: session
         )
         return (service, monitoring, session)
@@ -728,6 +745,21 @@ struct AccountCleanupServiceTests {
         #expect(appStorage.bool(forKey: AppStorageKeys.onboardingComplete) == false)
     }
 
+    @Test func clearsTheDeletedUsersOnboardingCopyAndOutbox() async {
+        let userData = MockUserLocalData(log: log)
+        let (service, _, _) = makeService(userLocalData: userData)
+        await service.performPostDeletionCleanup()
+        #expect(userData.clearedUsers == [deletedUser])
+    }
+
+    @Test func noSignedInUserSkipsTheUserDataClear() async {
+        let userData = MockUserLocalData(log: log)
+        let (service, _, session) = makeService(userLocalData: userData, currentUserId: .some(nil))
+        await service.performPostDeletionCleanup()
+        #expect(userData.clearedUsers.isEmpty)
+        #expect(session.endCount == 1)
+    }
+
     @Test func keepsDeviceScopedAPNsTokenForTheNextUser() async {
         // The APNs token belongs to the device, not the deleted user; the next account to sign
         // in needs it to upload. Its server row already cascaded away with the user.
@@ -743,7 +775,7 @@ struct AccountCleanupServiceTests {
         await service.performPostDeletionCleanup()
 
         #expect(session.endCount == 1)
-        #expect(log.entries == ["monitoring.stop", "session.endLocal"])
+        #expect(log.entries == ["monitoring.stop", "userData.clear", "session.endLocal"])
         // The App Group was already empty by the time the session ended (order matters: the
         // sign-out flips AppState, and the extension must not find a stale JWT afterwards).
         #expect(session.appGroupAtSignOut?.isEmpty == true)
@@ -842,6 +874,19 @@ private final class MockDeleteFunction: DeleteAccountFunctionInvoking {
         tokens.append(accessToken)
         log.entries.append("function.delete")
         if let errorToThrow { throw errorToThrow }
+    }
+}
+
+@MainActor
+private final class MockUserLocalData: UserLocalDataClearing {
+    let log: CallLog
+    private(set) var clearedUsers: [UUID] = []
+
+    init(log: CallLog) { self.log = log }
+
+    func clearLocalData(for userId: UUID) {
+        clearedUsers.append(userId)
+        log.entries.append("userData.clear")
     }
 }
 

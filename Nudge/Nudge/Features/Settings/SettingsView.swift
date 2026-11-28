@@ -22,6 +22,7 @@ struct SettingsView: View {
             // Nothing else may run (sign out, save) while the account is being deleted.
             .disabled(deletionViewModel.isDeleting)
             .navigationTitle("Settings")
+            .mainTabHeader()
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {

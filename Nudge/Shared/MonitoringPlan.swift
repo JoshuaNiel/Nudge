@@ -133,6 +133,22 @@ enum MonitoringPlan {
     /// self-limiting — if it were ever wrong, it would re-register on every call —
     /// so the extension, which has no way to bound its own callbacks, uses
     /// `isRegistrationStale` instead.
+    /// Screen Time access was probably removed (device finding B): monitoring registered
+    /// earlier today, in this install, is gone. A revoke in Settings clears every activity,
+    /// yet throws nothing on device: `startMonitoring` succeeds again and
+    /// `AuthorizationCenter` keeps reporting approved until a relaunch.
+    ///
+    /// Another day (the midnight re-arm) or no stamp (a first registration) is ordinary.
+    /// Known false positive: a device restart later on the same day also clears activities;
+    /// the banner's Allow then re-confirms instantly (already approved) and clears it.
+    static func activitiesLapsedSinceRegisteringToday(
+        isMonitoringActive: Bool,
+        lastDay: String?,
+        today: String
+    ) -> Bool {
+        !isMonitoringActive && lastDay == today
+    }
+
     static func shouldRegister(
         isMonitoringActive: Bool,
         lastDay: String?,
@@ -188,7 +204,7 @@ enum MonitoringPlan {
     /// On failure all three are restored to their previous values (removed if they
     /// were absent), so the next opportunity retries against the old state.
     ///
-    /// On success it also prunes old `FiredEventStore` days.
+    /// On success it also prunes old `FiredEventStore` days (at most once per day).
     @discardableResult
     static func register(
         summaries: [GoalSummary],
@@ -202,10 +218,12 @@ enum MonitoringPlan {
         let previousSignature = defaults?.string(forKey: AppGroupKeys.lastRegisteredSignature)
         let previousGoals = defaults?.data(forKey: AppGroupKeys.goalsActive)
 
-        defaults?.set(dayStamp(for: now, calendar: calendar), forKey: AppGroupKeys.lastRegisteredDay)
-        defaults?.set(signature(for: summaries), forKey: AppGroupKeys.lastRegisteredSignature)
+        // Unchanged values are not rewritten: each App Group write is a round trip to
+        // cfprefsd and a change notification to every process sharing the group.
+        defaults?.setIfChanged(dayStamp(for: now, calendar: calendar), forKey: AppGroupKeys.lastRegisteredDay)
+        defaults?.setIfChanged(signature(for: summaries), forKey: AppGroupKeys.lastRegisteredSignature)
         if let data = try? JSONEncoder().encode(summaries) {
-            defaults?.set(data, forKey: AppGroupKeys.goalsActive)
+            defaults?.setIfChanged(data, forKey: AppGroupKeys.goalsActive)
         }
 
         do {
@@ -223,8 +241,9 @@ enum MonitoringPlan {
 
         if let defaults {
             // Runs at least daily (midnight re-arm), which keeps the fired-event
-            // records bounded without a dedicated cleanup job.
-            FiredEventStore(defaults: defaults).prune(keepingDaysFrom: now, calendar: calendar)
+            // records bounded without a dedicated cleanup job. Once per day: the prune
+            // scans the whole domain.
+            FiredEventStore(defaults: defaults).pruneIfNeeded(keepingDaysFrom: now, calendar: calendar)
         }
 
         logger.log("registered monitoring — \(events.count) event(s), \(summaries.count) summary(ies)")
@@ -294,5 +313,16 @@ extension UserDefaults {
         } else {
             removeObject(forKey: key)
         }
+    }
+
+    /// Writes only when the stored value differs, so repeated syncs of the same value cost
+    /// a read, not a cfprefsd write and a cross-process change notification.
+    func setIfChanged(_ value: String, forKey key: String) {
+        if string(forKey: key) != value { set(value, forKey: key) }
+    }
+
+    /// `Data` variant of `setIfChanged(_:forKey:)`.
+    func setIfChanged(_ value: Data, forKey key: String) {
+        if data(forKey: key) != value { set(value, forKey: key) }
     }
 }

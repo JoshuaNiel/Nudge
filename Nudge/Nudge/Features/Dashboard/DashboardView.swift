@@ -11,11 +11,14 @@ struct DashboardView: View {
                 systemImage: "chart.bar.xaxis",
                 description: Text("Usage tracking display will be here in Phase 2.")
             )
+            .permissionBanners(for: .dashboard)
             .navigationTitle("Dashboard")
+            .mainTabHeader()
         }
     }
 }
 
 #Preview {
     DashboardView()
+        .environmentObject(PermissionStatusStore())
 }

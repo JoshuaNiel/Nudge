@@ -87,15 +87,6 @@ struct ConfirmEmailVariantRoutingTests {
         #expect(!String(reflecting: pending).contains("s3cret-pass"))
     }
 
-    @Test func confirmStepAdvancesOnLinkSignIn() {
-        let pending = PendingEmailConfirmation(email: "grace@example.com", password: "12345678", variant: .afterSignUp)
-        #expect(OnboardingCoordinator.Step.tour.advancesOnSignIn)
-        #expect(OnboardingCoordinator.Step.auth.advancesOnSignIn)
-        #expect(OnboardingCoordinator.Step.confirmEmail(pending).advancesOnSignIn)
-        #expect(OnboardingCoordinator.Step.profileSetup.advancesOnSignIn == false)
-        #expect(OnboardingCoordinator.Step.permissions.advancesOnSignIn == false)
-    }
-
     @Test func backToSignInPrefillsEmailInSignInMode() {
         let vm = AuthViewModel(service: MockEmailService(), prefillEmail: "grace@example.com")
 
