@@ -21,6 +21,10 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 - **Location-based settings lock.** A CoreLocation check when the Settings screen opens.
 - **True continuous-session detection.** `session.timeout` fires on accumulated daily total, not continuous use. Explore `DeviceActivitySchedule.warningTime` or short overlapping schedules.
 
+- **User-set week-start day.** Week mode and weekly math hard-code Sunday (`DashboardCalendar.defaultFirstWeekday`); add a "Week starts on" setting (shared with weekly goals). (User request 2026-11-27.)
+- **Nudge categories on the Dashboard.** Apps | Categories shows Apple's categories; add the user's own categories (#22) as a third breakdown source (`UsageBreakdown` is an enum for this). (2026-11-27.)
+- **Rolling Hills loading style.** Kept in code (`LoadingIndicatorStyle.rollingHills`) for a future use the user liked; Tipping Point is the app-wide indicator. (2026-11-27.)
+
 ## Security
 
 - **`send-consent` trusts its webhook payload, so it can be abused to send SMS.** The gateway accepts the public anon key, so a crafted POST could make the function text arbitrary numbers. Fix, in order of preference:
@@ -71,6 +75,8 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 
 ## Known Bugs / Tech Debt
 
+- **Settings Save button while saving:** it turns `systemGray4`, so the white loading indicator and "Saving…" have low contrast in light mode (pre-existing). Use a darker disabled colour. (Found 2026-11-27.)
+- **Large-title font and Dynamic Type:** the 28pt title is scaled once at launch, so a text-size change applies on the next launch. (2026-11-27.)
 - **Sign-in is still a bit slow** after #26's fixes (the prune runs once a day, plus setIfChanged). Profile it on device with Instruments (Time Profiler / Hangs) during sign-in → onboarding routing to find the remaining main-thread work. (User report 2026-11-27.)
 - **Flaky timing-based tests.** `RealtimeFriendTests` (2), `FriendScreenTests.realtimeEchoOfTheRenameIsDeduped` and `APNsTests.unregisterGivesUpAfterTimeout` (a 5 s limit) failed once on a slow simulator run and passed on rerun (2026-11-27). Replace wall-clock waits with injected clocks or deterministic signals.
 - **Outbox: a write that is always rejected blocks the queue.** Unknown and transient errors are retried forever (no data loss), so one write that always fails with an unexpected error blocks that user's later writes. The user chose option B (2026-11-27): after about 10 failed attempts across separate flushes, move the write to a persisted "failed" list, log it, and let the queue continue. Consider a way to surface or retry failed writes. Becomes important with offline-first.

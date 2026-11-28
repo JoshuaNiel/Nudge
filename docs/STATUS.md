@@ -1,11 +1,11 @@
 # Nudge — Project Status
 
 > **Read this first every session.** Update it at the end of each session.
-> Last updated: 2026-11-27
+> Last updated: 2026-11-28
 
 ---
 
-## Where things stand (2026-11-27)
+## Where things stand (2026-11-28)
 
 A PR-by-PR walkthrough with the user is in progress. Each PR is checked out in the **main
 folder** (`~/BYU/CS452/screen-time`), fixed in response to the user's decisions and device testing,
@@ -20,18 +20,23 @@ then merged (merge commit; squash only for leaf PRs).
 | #19 | Account deletion + password re-auth (app + server `amr`) + Account Deleted page |
 | #20 | Realtime nudge history + live Friends list, friend-accepted push, friend screen (rename/remove) |
 | #16 | Auth: 8-char rule, specific link errors, email confirmation, PKCE Resend, eye toggle, confirm-email screen, generic 429 |
+| #26 | Onboarding progress (server + offline outbox), ask-once permissions, banners, Screen Time revoke detection (migration 009) |
 
 ### Open, in order
 | PR | Branch | State |
 |---|---|---|
-| **#26** | `feat/onboarding-progress` | **Done and device-tested; the user said "looks good". Confirm, then merge (merge commit).** Migration 009 has been run. |
-| #15 | `feat/phase-2-dashboard` | Next. Merge `main` into it, then decisions → setup → testing |
+| **#15** | `feat/phase-2-dashboard` | **In progress.** `main` merged in. Rounds 1–2 are done and device-tested: access state, store-based availability, real-foreground refresh, spinner-stuck fix, Day/Week, date picker, Total/Daily Average, Apps/Categories, native 28pt large titles, Tipping Point loading indicator. **v3** (report owns navigation, 28-day window, app/category detail, filter; spec in `phase-2-dashboard.md` "Dashboard v3") is being implemented, then device-tested. |
 | #18 | `feat/goals-core` | Must adopt `FiredEventStore` (#13) instead of its own fired set; burst of milestones on a lowered limit (notify only the highest) |
 | #22 | `feat/goals-ui` | Replaces the Goals UI. **Must carry #26's add-goal permission asks** (`GoalsSheetFlow`) |
 | #23 | `feat/why-reminders` | |
 | #21 | `feat/nudge-trigger-settings` | |
 | #24 | `feat/daily-report` | |
 | #25 | `docs/session-wrap-2026-11-14` | Docs (this file). Merge last |
+
+**What later branches must adopt from #15:**
+- `mainTabHeader(title:)` (native 28pt large title) on any new main tab, e.g. #22's Categories;
+- `NudgeLoadingIndicator` instead of `ProgressView()`;
+- the Screen Time banner only on Goals.
 
 **Known mock fixes the remaining branches will need** after merging `main`: `fetchFriendId` stubs in
 #21/#24 mocks; `updateGoalSelection` in #21's MockGoalService; #19-era deletion tests vs #18 key

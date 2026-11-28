@@ -418,3 +418,21 @@ the foundation for app-wide offline-first (backlog). (#26)
 FamilyControls caches its authorization status per process, and `startMonitoring` doesn't throw
 after a revoke. If monitoring was registered today but `DeviceActivityCenter.activities` is
 empty, the app treats Screen Time as denied until an in-app approval. (#26)
+
+### ADR-075: The Dashboard report owns its own navigation over a fixed 28-day window
+A `DeviceActivityReport` can only receive a filter from the app, and rebuilding it (a new `.id`)
+sometimes never draws again. The app therefore sends one fixed filter: the last 28 days, plus
+the user's app/category filter. Day/Week, stepping, the date picker and the app/category detail
+screens all live inside the report extension, which has every day's data in memory.
+- Verified on device (2026-11-28 spike):
+  - pushes, sheets and the date picker work inside the report;
+  - in-report state survives filter changes;
+  - a 35-day query costs about 0.5 s and about 28 MB.
+- App Group reads also work in the report but aren't needed.
+- Averages divide by collected days only: from the first day with usage, since Apple reports
+  earlier days as 0, not missing. (#15)
+
+### ADR-076: Main tabs use native large titles, shrunk to 28pt
+A custom title broke the title-to-back-button push animation, so all main tabs use the
+native large title. It is set once at launch with `UINavigationBarAppearance` (28pt bold, scaled
+by Dynamic Type). (#15)
