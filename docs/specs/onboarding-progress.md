@@ -1,7 +1,7 @@
 # Onboarding Progress + Permission Banners
 
 Branch `feat/onboarding-progress` (from `main` after #16). Decisions confirmed with the user on
-2026-11-27. **Status: draft. Awaiting the user's final check before implementation.**
+2026-11-27. **Status: approved by the user 2026-11-27. Implementing.**
 
 Replaces the device-local `@AppStorage("onboardingComplete")` flag. Fixes the backlog item
 "A returning user on a new device or reinstall redoes onboarding".
