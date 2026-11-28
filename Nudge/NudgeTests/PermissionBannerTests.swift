@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import Combine
+import DeviceActivity
 import FamilyControls
 import UserNotifications
 import UIKit
@@ -18,6 +19,8 @@ private final class FakePermissionProvider: PermissionStatusProvider {
     var notificationsAfterRequest: PermissionStatus?
     private(set) var screenTimeRequests = 0
     private(set) var notificationRequests = 0
+    /// `requestAuthorization` throws (the user declined, or the request failed).
+    var screenTimeRequestThrows = false
     /// Pushes a Screen Time change, as `AuthorizationCenter` does (spec §5c).
     let screenTimeSubject = PassthroughSubject<PermissionStatus, Never>()
     var screenTimeStatusChanges: AnyPublisher<PermissionStatus, Never> { screenTimeSubject.eraseToAnyPublisher() }
@@ -30,9 +33,10 @@ private final class FakePermissionProvider: PermissionStatusProvider {
     func screenTimeStatus() -> PermissionStatus { screenTime }
     func notificationStatus() async -> PermissionStatus { notifications }
 
-    func requestScreenTimeAuthorization() async {
+    func requestScreenTimeAuthorization() async -> Bool {
         screenTimeRequests += 1
         if let screenTimeAfterRequest { screenTime = screenTimeAfterRequest }
+        return !screenTimeRequestThrows
     }
 
     func requestNotificationAuthorization() async {
@@ -123,6 +127,134 @@ struct PermissionStatusStoreTests {
         let updated = await store.$screenTime.values.first { $0 == .denied }
         #expect(updated == .denied)
         #expect(store.notifications == .granted)
+    }
+}
+
+// MARK: - Screen Time revoked while running (FamilyControls caches status per process)
+
+@Suite("Screen Time unauthorized from monitoring")
+@MainActor
+struct ScreenTimeMonitoringSignalTests {
+
+    /// Granted at launch: `AuthorizationCenter` keeps reporting this after a revoke.
+    private func makeGrantedStore() async -> (PermissionStatusStore, FakePermissionProvider) {
+        let provider = FakePermissionProvider(screenTime: .granted, notifications: .granted)
+        let store = PermissionStatusStore(provider: provider)
+        await store.refresh()
+        return (store, provider)
+    }
+
+    @Test func onlyTheUnauthorizedMonitoringErrorCounts() {
+        #expect(MonitoringRefreshOutcome.failed(DeviceActivityCenter.MonitoringError.unauthorized)
+            .isScreenTimeUnauthorized)
+        #expect(!MonitoringRefreshOutcome.failed(DeviceActivityCenter.MonitoringError.excessiveActivities)
+            .isScreenTimeUnauthorized)
+        #expect(!MonitoringRefreshOutcome.failed(DeviceActivityCenter.MonitoringError.intervalTooShort)
+            .isScreenTimeUnauthorized)
+        #expect(!MonitoringRefreshOutcome.failed(DeviceActivityCenter.MonitoringError.invalidDateComponents)
+            .isScreenTimeUnauthorized)
+        // The report fetch's error says "not authorized" too, but is not the monitoring signal.
+        #expect(!MonitoringRefreshOutcome.failed(NSError(domain: "UsageTrackingErrorDomain", code: 2))
+            .isScreenTimeUnauthorized)
+        #expect(!MonitoringRefreshOutcome.registered.isScreenTimeUnauthorized)
+        #expect(!MonitoringRefreshOutcome.notNeeded.isScreenTimeUnauthorized)
+    }
+
+    @Test func anUnauthorizedRegistrationMarksScreenTimeDenied() async {
+        let (store, _) = await makeGrantedStore()
+
+        store.recordMonitoringOutcome(.failed(DeviceActivityCenter.MonitoringError.unauthorized))
+
+        #expect(store.screenTime == .denied)
+        #expect(store.status(of: .screenTime) == .denied)
+        #expect(store.notifications == .granted)
+    }
+
+    @Test func theCachedApprovedStatusDoesNotHideTheDenial() async {
+        let (store, provider) = await makeGrantedStore()
+        store.recordMonitoringOutcome(.failed(DeviceActivityCenter.MonitoringError.unauthorized))
+
+        // Foreground refresh and a pushed status both still say approved (cached in-process).
+        await store.refresh()
+        provider.screenTimeSubject.send(.granted)
+        // The store receives pushes on the main queue; this hop runs after that delivery.
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+
+        #expect(store.screenTime == .denied)
+    }
+
+    @Test func otherRegistrationErrorsDoNotChangeTheStatus() async {
+        let (store, _) = await makeGrantedStore()
+
+        store.recordMonitoringOutcome(.failed(DeviceActivityCenter.MonitoringError.excessiveActivities))
+        store.recordMonitoringOutcome(.failed(NSError(domain: "UsageTrackingErrorDomain", code: 2)))
+        store.recordMonitoringOutcome(.failed(URLError(.notConnectedToInternet)))
+        store.recordMonitoringOutcome(.notNeeded)
+
+        #expect(store.screenTime == .granted)
+    }
+
+    @Test func aLaterSuccessfulRegistrationClearsTheDenial() async {
+        let (store, _) = await makeGrantedStore()
+        store.recordMonitoringOutcome(.failed(DeviceActivityCenter.MonitoringError.unauthorized))
+
+        store.recordMonitoringOutcome(.registered)
+
+        #expect(store.screenTime == .granted)
+    }
+
+    @Test func aSkippedRegistrationKeepsTheDenial() async {
+        let (store, _) = await makeGrantedStore()
+        store.recordMonitoringOutcome(.failed(DeviceActivityCenter.MonitoringError.unauthorized))
+
+        store.recordMonitoringOutcome(.notNeeded)
+        store.recordMonitoringOutcome(.failed(DeviceActivityCenter.MonitoringError.intervalTooShort))
+
+        #expect(store.screenTime == .denied)
+    }
+
+    @Test func approvingAgainClearsTheDenial() async {
+        let (store, provider) = await makeGrantedStore()
+        store.recordMonitoringOutcome(.failed(DeviceActivityCenter.MonitoringError.unauthorized))
+        provider.screenTimeAfterRequest = .granted
+
+        await store.request(.screenTime)
+
+        #expect(provider.screenTimeRequests == 1)
+        #expect(store.screenTime == .granted)
+    }
+
+    @Test func aDeclinedRequestKeepsTheDenial() async {
+        let (store, provider) = await makeGrantedStore()
+        store.recordMonitoringOutcome(.failed(DeviceActivityCenter.MonitoringError.unauthorized))
+        // Declined: requestAuthorization throws, but the cached status still reads approved.
+        provider.screenTimeRequestThrows = true
+
+        await store.request(.screenTime)
+
+        #expect(store.screenTime == .denied)
+    }
+
+    @Test func aRequestThatEndsNotApprovedKeepsTheDenial() async {
+        let (store, provider) = await makeGrantedStore()
+        store.recordMonitoringOutcome(.failed(DeviceActivityCenter.MonitoringError.unauthorized))
+        provider.screenTimeAfterRequest = .denied
+
+        await store.request(.screenTime)
+
+        #expect(store.screenTime == .denied)
+    }
+
+    @Test func aRealSystemDenialStillShowsWithoutTheSignal() async {
+        let (store, provider) = await makeGrantedStore()
+        store.recordMonitoringOutcome(.registered)
+
+        provider.screenTime = .denied
+        await store.refresh()
+
+        #expect(store.screenTime == .denied)
     }
 }
 

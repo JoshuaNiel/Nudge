@@ -13,6 +13,32 @@ import FamilyControls
 /// at `intervalDidStart` (ADR-054). `refreshMonitoring` covers the cases the
 /// extension cannot: a device restart that cleared all activities, and a day
 /// rollover the extension somehow missed.
+/// What a foreground `refreshMonitoring` did. `PermissionStatusStore` reads it for the one
+/// Screen Time signal FamilyControls doesn't give the app directly (see `isScreenTimeUnauthorized`).
+enum MonitoringRefreshOutcome {
+    /// The current registration is fresh; `DeviceActivityCenter` was not called.
+    case notNeeded
+    /// `startMonitoring` succeeded, so Screen Time is authorized right now.
+    case registered
+    /// `startMonitoring` threw. The error is passed through unchanged from `DeviceActivityCenter`.
+    case failed(Error)
+
+    /// True only for `DeviceActivityCenter.MonitoringError.unauthorized`, the error
+    /// `startMonitoring` throws once the user revokes Nudge's Screen Time access.
+    ///
+    /// This compensates for FamilyControls caching the authorization status per process:
+    /// after a revoke in Settings, `AuthorizationCenter.shared.authorizationStatus` (and its
+    /// publisher) keep reporting `.approved` until the app is relaunched, while monitoring
+    /// already fails. Matched exactly: other monitoring errors (bad schedule, too many
+    /// activities) and other "not authorized" errors (e.g. the report's
+    /// `UsageTrackingErrorDomain` fetch error) say nothing reliable about the permission.
+    var isScreenTimeUnauthorized: Bool {
+        guard case .failed(let error) = self,
+              let monitoringError = error as? DeviceActivityCenter.MonitoringError else { return false }
+        return monitoringError == .unauthorized
+    }
+}
+
 @MainActor
 class MonitoringRegistrationService {
 
@@ -44,14 +70,19 @@ class MonitoringRegistrationService {
 
     /// Foreground entry point. Re-registers only when something makes the current
     /// registration stale: monitoring lapsed, the calendar day rolled over, or the
-    /// goal set changed. Returns whether a registration actually happened.
+    /// goal set changed. Returns what happened, so the caller can report an unauthorized
+    /// failure to `PermissionStatusStore`.
+    ///
+    /// A revoked Screen Time permission clears every activity, so `needed` is true and this
+    /// attempts (and fails) one registration per foreground. That is bounded: `register`
+    /// restores the stamps on failure and nothing retries until the next foreground.
     @discardableResult
     func refreshMonitoring(
         goals: [GoalSummary],
         sessionTimeoutMinutes: Int?,
         now: Date = Date(),
         calendar: Calendar = .current
-    ) -> Bool {
+    ) -> MonitoringRefreshOutcome {
         let defaults = UserDefaults(suiteName: AppGroupKeys.suiteName)
         let summaries = MonitoringPlan.composeSummaries(
             goals: goals,
@@ -74,14 +105,14 @@ class MonitoringRegistrationService {
         needed: \(needed)
         """)
 
-        guard needed else { return false }
+        guard needed else { return .notNeeded }
 
         do {
             try registerMonitoring(goals: goals, sessionTimeoutMinutes: sessionTimeoutMinutes)
-            return true
+            return .registered
         } catch {
             print("[MonitoringService] startMonitoring failed: \(error)")
-            return false
+            return .failed(error)
         }
     }
 

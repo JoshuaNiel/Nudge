@@ -127,10 +127,13 @@ struct NudgeApp: App {
             NudgeApp.logger.error("goal fetch failed — leaving existing monitoring registration untouched")
             return
         }
-        monitoringService.refreshMonitoring(
+        let outcome = monitoringService.refreshMonitoring(
             goals: goals,
             sessionTimeoutMinutes: appState.sessionTimeoutMinutes
         )
+        // FamilyControls keeps the launch-time status in-process, so a Screen Time revoke
+        // made while Nudge runs surfaces only here, as an unauthorized registration.
+        permissions.recordMonitoringOutcome(outcome)
     }
 
     // MARK: - Background Tasks

@@ -18,6 +18,10 @@ enum PermissionBannerAction: Equatable {
 
 enum PermissionBanners {
 
+    /// The gap below the navigation bar, and between the banners and the page content.
+    /// One value for both, so a banner never doubles the gap (conventions: field-group spacing).
+    static let contentSpacing: CGFloat = 12
+
     /// The banners a screen shows, Screen Time first.
     static func visible(on screen: PermissionBannerScreen,
                         screenTime: PermissionStatus,
@@ -115,7 +119,7 @@ struct PermissionBannerStack: View {
                                         notifications: permissions.notifications)
             : []
         if !visible.isEmpty {
-            VStack(spacing: 12) {
+            VStack(spacing: PermissionBanners.contentSpacing) {
                 ForEach(visible, id: \.self) { permission in
                     PermissionBanner(permission: permission, status: permissions.status(of: permission)) {
                         perform(for: permission)
@@ -123,8 +127,8 @@ struct PermissionBannerStack: View {
                 }
             }
             .padding(.horizontal, 24)
-            .padding(.top, 12)
-            .padding(.bottom, 4)
+            // No bottom padding: the content's own top margin (see `permissionBanners`) is the gap.
+            .padding(.top, PermissionBanners.contentSpacing)
         }
     }
 }
@@ -143,10 +147,21 @@ extension View {
     /// Puts the permission banners for `screen` first in the page content, below the
     /// navigation bar (spec §5c), above whatever the screen shows (content, empty, loading or
     /// error state), which fills the rest. Nothing is added when no banner applies.
+    ///
+    /// Scrolling content (the Goals and Friends lists) also gets a top content margin. An
+    /// inset-grouped `List` whose first section has no header starts its first row exactly at
+    /// the navigation bar's bottom edge; with the always-visible header (§5c) that reads as
+    /// touching it, and below a banner the list starts right at the banner. The margin sits
+    /// inside the scroll view (on top of the safe-area inset when the list runs under the
+    /// bar), so it scrolls away like the native inset, applies with or without banners, and
+    /// is the only gap below a banner. Non-scrolling states (empty, loading, error) center
+    /// themselves and are unaffected. Applied to this content only, so sheets and pushed
+    /// screens attached after this modifier keep their own margins.
     func permissionBanners(for screen: PermissionBannerScreen) -> some View {
         VStack(spacing: 0) {
             PermissionBannerStack(screen: screen)
-            frame(maxWidth: .infinity, maxHeight: .infinity)
+            contentMargins(.top, PermissionBanners.contentSpacing, for: .scrollContent)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
