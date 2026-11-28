@@ -527,3 +527,662 @@ struct DashboardAvailabilityTests {
         }
     }
 }
+
+// MARK: - Dashboard v2 (2026-11-27): Day | Week, date picker, Totals | Averages, Categories
+
+private typealias CategorySample = CategoryUsageSample<String>
+private typealias Report = UsageReport<String, String>
+
+private func category(_ token: String?, name: String? = nil, seconds: TimeInterval) -> CategorySample {
+    CategorySample(token: token, localizedName: name, duration: seconds)
+}
+
+/// V2/V3 date math. "Today" is Friday Nov 27 2026, 15:00 in Denver unless a test says otherwise,
+/// so the selectable range starts Wed Oct 28 and the current week is Sun Nov 22 – Sat Nov 28.
+@Suite("DashboardCalendar")
+@MainActor
+struct DashboardCalendarTests {
+
+    private let cal = calendar("America/Denver")
+    private var now: Date { date(2026, 11, 27, 15, in: cal) }
+    private var nav: DashboardCalendar { DashboardCalendar(calendar: cal, today: now) }
+
+    private func midnight(_ y: Int, _ m: Int, _ d: Int) -> Date { date(y, m, d, 0, 0, in: cal) }
+    private func week(_ y: Int, _ m: Int, _ d: Int) -> DashboardPeriod { DashboardPeriod(mode: .week, start: midnight(y, m, d)) }
+    private func day(_ y: Int, _ m: Int, _ d: Int) -> DashboardPeriod { DashboardPeriod(mode: .day, start: midnight(y, m, d)) }
+
+    // MARK: week start
+
+    @Test func weeksStartOnSundayByDefault() {
+        #expect(DashboardCalendar.defaultFirstWeekday == 1)
+        for d in 22...28 {
+            #expect(nav.weekStart(containing: date(2026, 11, d, 18, in: cal)) == midnight(2026, 11, 22), "Nov \(d)")
+        }
+    }
+
+    @Test func weekStartFollowsTheFirstWeekdayParameter() {
+        let monday = DashboardCalendar(calendar: cal, today: now, firstWeekday: 2)
+        #expect(monday.weekStart(containing: date(2026, 11, 22, in: cal)) == midnight(2026, 11, 16))
+        #expect(monday.weekStart(containing: date(2026, 11, 23, in: cal)) == midnight(2026, 11, 23))
+    }
+
+    @Test func periodContainingNormalizesToTheDayOrWeekStart() {
+        #expect(nav.period(containing: date(2026, 11, 18, 14, in: cal), mode: .day) == day(2026, 11, 18))
+        #expect(nav.period(containing: date(2026, 11, 18, 14, in: cal), mode: .week) == week(2026, 11, 15))
+    }
+
+    // MARK: filter interval
+
+    @Test func dayFilterIsTheWholeLocalDay() {
+        let interval = nav.filterInterval(for: day(2026, 11, 25))
+        #expect(interval.start == midnight(2026, 11, 25))
+        #expect(interval.end == midnight(2026, 11, 26))
+    }
+
+    @Test func pastWeekFilterRunsSundayToNextSunday() {
+        let interval = nav.filterInterval(for: week(2026, 11, 15))
+        #expect(interval.start == midnight(2026, 11, 15))
+        #expect(interval.end == midnight(2026, 11, 22))
+        #expect(interval.duration == 7 * 86_400)
+    }
+
+    /// Not clipped at today, so a week's range never looks like a single day (scope inference).
+    @Test func currentWeekFilterIsTheWholeWeek() {
+        let interval = nav.filterInterval(for: week(2026, 11, 22))
+        #expect(interval.start == midnight(2026, 11, 22))
+        #expect(interval.end == midnight(2026, 11, 29))
+    }
+
+    @Test func currentWeekOnSundayIsStillTheWholeWeek() {
+        let sunday = DashboardCalendar(calendar: cal, today: date(2026, 11, 22, 0, 0, in: cal))
+        let interval = sunday.filterInterval(for: week(2026, 11, 22))
+        #expect(interval.start == midnight(2026, 11, 22))
+        #expect(interval.end == midnight(2026, 11, 29))
+    }
+
+    @Test func weekFilterAcrossDSTFallBackIsSevenLocalDays() {
+        // 2026-11-01 (a Sunday) is 25 hours long in Denver.
+        let interval = nav.filterInterval(for: week(2026, 11, 1))
+        #expect(interval.start == midnight(2026, 11, 1))
+        #expect(interval.end == midnight(2026, 11, 8))
+        #expect(interval.duration == 7 * 86_400 + 3600)
+    }
+
+    @Test func weekFilterAcrossDSTSpringForwardIsSevenLocalDays() {
+        // 2026-03-08 (a Sunday) is 23 hours long in Denver.
+        let march = DashboardCalendar(calendar: cal, today: date(2026, 3, 20, in: cal))
+        let interval = march.filterInterval(for: week(2026, 3, 8))
+        #expect(interval.start == midnight(2026, 3, 8))
+        #expect(interval.end == midnight(2026, 3, 15))
+        #expect(interval.duration == 7 * 86_400 - 3600)
+    }
+
+    @Test func weekFilterSpansMonths() {
+        let december = DashboardCalendar(calendar: cal, today: date(2026, 12, 10, in: cal))
+        let interval = december.filterInterval(for: week(2026, 11, 29))
+        #expect(interval.start == midnight(2026, 11, 29))
+        #expect(interval.end == midnight(2026, 12, 6))
+    }
+
+    @Test func weekFilterSpansYears() {
+        let january = DashboardCalendar(calendar: cal, today: date(2027, 1, 10, in: cal))
+        let interval = january.filterInterval(for: week(2026, 12, 27))
+        #expect(interval.start == midnight(2026, 12, 27))
+        #expect(interval.end == midnight(2027, 1, 3))
+    }
+
+    // MARK: titles
+
+    @Test func dayTitlesAreUnchanged() {
+        #expect(nav.title(for: day(2026, 11, 27), locale: enUS) == "Today")
+        #expect(nav.title(for: day(2026, 11, 26), locale: enUS) == "Yesterday")
+        #expect(nav.title(for: day(2026, 11, 25), locale: enUS) == "Nov 25")
+    }
+
+    @Test func weekTitleWithinAMonth() {
+        #expect(nav.title(for: week(2026, 11, 15), locale: enUS) == "Nov 15 – 21")
+    }
+
+    @Test func currentWeekTitleIsStillADateRange() {
+        #expect(nav.title(for: week(2026, 11, 22), locale: enUS) == "Nov 22 – 28")
+    }
+
+    @Test func weekTitleAcrossMonths() {
+        let december = DashboardCalendar(calendar: cal, today: date(2026, 12, 10, in: cal))
+        #expect(december.title(for: week(2026, 11, 29), locale: enUS) == "Nov 29 – Dec 5")
+        let fall2025 = DashboardCalendar(calendar: cal, today: date(2025, 11, 10, in: cal))
+        #expect(fall2025.title(for: week(2025, 10, 26), locale: enUS) == "Oct 26 – Nov 1")
+    }
+
+    @Test func weekTitleAcrossYears() {
+        let january = DashboardCalendar(calendar: cal, today: date(2027, 1, 10, in: cal))
+        #expect(january.title(for: week(2026, 12, 27), locale: enUS) == "Dec 27 – Jan 2")
+    }
+
+    // MARK: stepping and bounds
+
+    @Test func weekStepsOneWeek() {
+        #expect(nav.step(week(2026, 11, 22), by: -1) == week(2026, 11, 15))
+        #expect(nav.step(week(2026, 11, 15), by: 1) == week(2026, 11, 22))
+    }
+
+    @Test func dayStepsOneDay() {
+        #expect(nav.step(day(2026, 11, 27), by: -1) == day(2026, 11, 26))
+        #expect(nav.step(day(2026, 11, 27), by: 1) == day(2026, 11, 27))
+    }
+
+    @Test func cannotStepForwardOnTheCurrentWeek() {
+        #expect(!nav.canStepForward(week(2026, 11, 22)))
+        #expect(nav.canStepForward(week(2026, 11, 15)))
+        #expect(nav.step(week(2026, 11, 22), by: 1) == week(2026, 11, 22))
+    }
+
+    @Test func earliestWeekIsTheOneContainingTheEarliestDay() {
+        // Earliest day is Wed Oct 28, so the week of Sun Oct 25 is reachable; Oct 18 is not.
+        #expect(nav.canStepBack(week(2026, 11, 1)))
+        #expect(nav.step(week(2026, 11, 1), by: -1) == week(2026, 10, 25))
+        #expect(!nav.canStepBack(week(2026, 10, 25)))
+        #expect(nav.step(week(2026, 10, 25), by: -1) == week(2026, 10, 25))
+    }
+
+    @Test func fourStepsBackReachTheEarliestWeek() {
+        var period = week(2026, 11, 22)
+        var steps = 0
+        while nav.canStepBack(period), steps < 100 {
+            period = nav.step(period, by: -1)
+            steps += 1
+        }
+        #expect(steps == 4)
+        #expect(period == week(2026, 10, 25))
+    }
+
+    @Test func weekStepsAcrossDSTLandOnSundayMidnight() {
+        #expect(nav.step(week(2026, 11, 8), by: -1) == week(2026, 11, 1))
+        #expect(nav.step(week(2026, 11, 1), by: 1) == week(2026, 11, 8))
+    }
+
+    @Test func clampPullsWeeksIntoRange() {
+        #expect(nav.clamp(week(2026, 9, 6)) == week(2026, 10, 25))
+        #expect(nav.clamp(week(2026, 12, 20)) == week(2026, 11, 22))
+        #expect(nav.clamp(DashboardPeriod(mode: .week, start: date(2026, 11, 18, 9, in: cal))) == week(2026, 11, 15))
+    }
+
+    @Test func clampKeepsDayBehavior() {
+        #expect(nav.clamp(day(2026, 12, 1)) == day(2026, 11, 27))
+        #expect(nav.clamp(day(2026, 9, 1)) == day(2026, 10, 28))
+    }
+
+    // MARK: Day <-> Week
+
+    @Test func dayToWeekShowsTheWeekContainingTheDay() {
+        #expect(nav.switching(day(2026, 11, 18), to: .week) == week(2026, 11, 15))
+        #expect(nav.switching(day(2026, 10, 28), to: .week) == week(2026, 10, 25))
+    }
+
+    @Test func weekToDaySelectsTodayInTheCurrentWeek() {
+        #expect(nav.switching(week(2026, 11, 22), to: .day) == day(2026, 11, 27))
+    }
+
+    @Test func weekToDaySelectsSaturdayInAPastWeek() {
+        #expect(nav.switching(week(2026, 11, 15), to: .day) == day(2026, 11, 21))
+        #expect(nav.switching(week(2026, 10, 25), to: .day) == day(2026, 10, 31))
+    }
+
+    @Test func switchingToTheSameModeKeepsTheSelection() {
+        #expect(nav.switching(day(2026, 11, 18), to: .day) == day(2026, 11, 18))
+        #expect(nav.switching(week(2026, 11, 15), to: .week) == week(2026, 11, 15))
+    }
+
+    // MARK: date picker
+
+    @Test func pickerRangeIsTheLastThirtyDaysThroughToday() {
+        let range = nav.pickerRange
+        #expect(range.lowerBound == midnight(2026, 10, 28))
+        #expect(range.contains(midnight(2026, 11, 27)))
+        #expect(range.contains(date(2026, 11, 27, 23, 59, in: cal)))
+        #expect(!range.contains(midnight(2026, 11, 28)))
+        #expect(!range.contains(date(2026, 10, 27, 23, 59, in: cal)))
+    }
+
+    @Test func pickerStartsOnTheSelectedDayOrTheWeeksDay() {
+        #expect(nav.pickerSelection(for: day(2026, 11, 18)) == midnight(2026, 11, 18))
+        #expect(nav.pickerSelection(for: week(2026, 11, 22)) == midnight(2026, 11, 27))
+        #expect(nav.pickerSelection(for: week(2026, 11, 15)) == midnight(2026, 11, 21))
+        #expect(nav.pickerRange.contains(nav.pickerSelection(for: week(2026, 10, 25))))
+    }
+
+    @Test func pickingADateSelectsItsDayOrWeek() {
+        let picked = date(2026, 11, 18, 14, in: cal)
+        #expect(nav.select(picked, mode: .day) == day(2026, 11, 18))
+        #expect(nav.select(picked, mode: .week) == week(2026, 11, 15))
+    }
+
+    @Test func pickingOutOfRangeIsClamped() {
+        #expect(nav.select(date(2026, 12, 3, in: cal), mode: .day) == day(2026, 11, 27))
+        #expect(nav.select(date(2026, 9, 3, in: cal), mode: .week) == week(2026, 10, 25))
+    }
+
+    // MARK: enums
+
+    @Test func modesAreDayThenWeek() {
+        #expect(DashboardMode.allCases == [.day, .week])
+        #expect(DashboardMode.day.title == "Day")
+        #expect(DashboardMode.week.title == "Week")
+    }
+}
+
+// MARK: - Refresh policy (V1)
+
+@Suite("ReportRebuildPolicy")
+@MainActor
+struct ReportRebuildPolicyTests {
+
+    private let t0 = ContinuousClock.now
+
+    @Test func debounceIsAbout400ms() {
+        #expect(ReportRebuildPolicy.defaultDebounce == .milliseconds(400))
+    }
+
+    @Test func nothingFiresWithoutARequest() {
+        var policy = ReportRebuildPolicy()
+        #expect(policy.remainingDelay(at: t0) == nil)
+        let fired1 = policy.fire(at: t0 + .seconds(5))
+        #expect(!fired1)
+    }
+
+    @Test func firesOnlyAfterTheDebounce() {
+        var policy = ReportRebuildPolicy()
+        policy.request(at: t0)
+        let fired2 = policy.fire(at: t0 + .milliseconds(399))
+        #expect(!fired2)
+        let fired3 = policy.fire(at: t0 + .milliseconds(400))
+        #expect(fired3)
+    }
+
+    @Test func firesOncePerRequest() {
+        var policy = ReportRebuildPolicy()
+        policy.request(at: t0)
+        let fired4 = policy.fire(at: t0 + .milliseconds(500))
+        #expect(fired4)
+        let fired5 = policy.fire(at: t0 + .milliseconds(900))
+        #expect(!fired5)
+    }
+
+    @Test func backToBackRequestsCoalesceIntoOneRebuild() {
+        var policy = ReportRebuildPolicy()
+        policy.request(at: t0)
+        policy.request(at: t0 + .milliseconds(100))
+        policy.request(at: t0 + .milliseconds(300))
+        // The deadline moved to 400 ms after the last request.
+        let fired6 = policy.fire(at: t0 + .milliseconds(500))
+        #expect(!fired6)
+        let fired7 = policy.fire(at: t0 + .milliseconds(700))
+        #expect(fired7)
+        let fired8 = policy.fire(at: t0 + .milliseconds(800))
+        #expect(!fired8)
+    }
+
+    @Test func remainingDelayCountsDownToZero() {
+        var policy = ReportRebuildPolicy()
+        policy.request(at: t0)
+        #expect(policy.remainingDelay(at: t0 + .milliseconds(100)) == .milliseconds(300))
+        #expect(policy.remainingDelay(at: t0 + .seconds(2)) == .zero)
+    }
+
+    @Test func everyRequestChangesTheGeneration() {
+        var policy = ReportRebuildPolicy()
+        let initial = policy.generation
+        policy.request(at: t0)
+        let first = policy.generation
+        policy.request(at: t0)
+        #expect(first != initial)
+        #expect(policy.generation != first)
+    }
+
+    @Test func cancelDropsThePendingRebuild() {
+        var policy = ReportRebuildPolicy()
+        policy.request(at: t0)
+        policy.cancel()
+        #expect(policy.remainingDelay(at: t0) == nil)
+        let fired9 = policy.fire(at: t0 + .seconds(1))
+        #expect(!fired9)
+    }
+
+    @Test func aRequestAfterARebuildSchedulesAnother() {
+        var policy = ReportRebuildPolicy()
+        policy.request(at: t0)
+        let fired10 = policy.fire(at: t0 + .milliseconds(400))
+        #expect(fired10)
+        policy.request(at: t0 + .seconds(1))
+        let fired11 = policy.fire(at: t0 + .milliseconds(1400))
+        #expect(fired11)
+    }
+}
+
+// MARK: - Days counted and averages (V4)
+
+@Suite("UsageAverages")
+@MainActor
+struct UsageAveragesTests {
+
+    private let cal = calendar("America/Denver")
+    private var now: Date { date(2026, 11, 27, 15, in: cal) }
+    private var nav: DashboardCalendar { DashboardCalendar(calendar: cal, today: now) }
+    private func week(_ y: Int, _ m: Int, _ d: Int) -> DashboardPeriod {
+        DashboardPeriod(mode: .week, start: date(y, m, d, 0, 0, in: cal))
+    }
+
+    private func counted(_ period: DashboardPeriod, today: Date) -> Int {
+        UsageAverages.daysCounted(in: nav.filterInterval(for: period), today: today, calendar: cal)
+    }
+
+    @Test func pastWeekCountsSevenDays() {
+        #expect(counted(week(2026, 11, 15), today: now) == 7)
+        #expect(counted(week(2026, 10, 25), today: now) == 7)
+    }
+
+    @Test func currentWeekCountsDaysThroughToday() {
+        // Sun Nov 22 … Fri Nov 27; Saturday is still in the future.
+        #expect(counted(week(2026, 11, 22), today: now) == 6)
+    }
+
+    @Test func currentWeekOnSundayCountsOneDay() {
+        #expect(counted(week(2026, 11, 22), today: date(2026, 11, 22, 0, 0, in: cal)) == 1)
+        #expect(counted(week(2026, 11, 22), today: date(2026, 11, 22, 23, 59, in: cal)) == 1)
+    }
+
+    @Test func currentWeekOnSaturdayCountsSevenDays() {
+        #expect(counted(week(2026, 11, 22), today: date(2026, 11, 28, 23, 59, in: cal)) == 7)
+    }
+
+    @Test func aWeekThatHasNotStartedCountsNothing() {
+        #expect(counted(week(2026, 11, 29), today: now) == 0)
+    }
+
+    @Test func dstWeeksCountSevenDays() {
+        #expect(counted(week(2026, 11, 1), today: now) == 7)
+        let march = DashboardCalendar(calendar: cal, today: date(2026, 3, 20, in: cal))
+        let marchWeek = march.filterInterval(for: week(2026, 3, 8))
+        #expect(UsageAverages.daysCounted(in: marchWeek, today: date(2026, 3, 20, in: cal), calendar: cal) == 7)
+    }
+
+    @Test func dstWeekInProgressCountsCalendarDays() {
+        // Fall-back Sunday is 25 h long; Tuesday is still day 3.
+        #expect(counted(week(2026, 11, 1), today: date(2026, 11, 3, 1, in: cal)) == 3)
+    }
+
+    @Test func singleDayCountsOne() {
+        #expect(UsageAverages.daysCounted(in: DashboardDay.filterInterval(for: now, calendar: cal), today: now, calendar: cal) == 1)
+    }
+
+    @Test func zeroLengthIntervalCountsNothing() {
+        #expect(UsageAverages.daysCounted(in: DateInterval(start: now, duration: 0), today: now, calendar: cal) == 0)
+    }
+
+    @Test func localDaysCountsTheRangesDays() {
+        #expect(UsageAverages.localDays(in: nav.filterInterval(for: week(2026, 11, 22)), calendar: cal) == 7)
+        #expect(UsageAverages.localDays(in: DashboardDay.filterInterval(for: now, calendar: cal), calendar: cal) == 1)
+    }
+
+    @Test func perDayRoundsToNearest() {
+        #expect(UsageAverages.perDay(100, days: 7) == 14)   // 14.29
+        #expect(UsageAverages.perDay(10, days: 4) == 3)     // 2.5 rounds up
+        #expect(UsageAverages.perDay(9, days: 4) == 2)      // 2.25
+        #expect(UsageAverages.perDay(0, days: 7) == 0)
+    }
+
+    @Test func perDayWithNoDaysLeavesTheValue() {
+        #expect(UsageAverages.perDay(7, days: 0) == 7)
+        #expect(UsageAverages.perDay(7, days: 1) == 7)
+    }
+
+    @Test func averagedSummaryDividesTotalsAndRowsAndKeepsOrder() {
+        let totals = Summary.aggregate([
+            segment(total: 7000, pickupsWithoutApp: 7, [
+                app("com.a.Big", seconds: 4200, pickups: 14),
+                app("com.a.Small", seconds: 700, pickups: 0),
+            ]),
+        ])
+        let averaged = totals.averaged(overDays: 7)
+        #expect(averaged.totalSeconds == 1000)
+        #expect(averaged.totalPickups == 3)
+        #expect(averaged.apps.map(\.displayName) == ["Big", "Small"])
+        #expect(averaged.apps.map(\.seconds) == [600, 100])
+        #expect(averaged.apps.map(\.pickups) == [2, 0])
+        #expect(averaged.apps.map(\.id) == totals.apps.map(\.id))
+    }
+}
+
+// MARK: - Report scope (how the extension knows Day vs Week)
+
+@Suite("UsageReportScope")
+@MainActor
+struct UsageReportScopeTests {
+
+    private let cal = calendar("America/Denver")
+    private var nav: DashboardCalendar { DashboardCalendar(calendar: cal, today: date(2026, 11, 27, 15, in: cal)) }
+
+    private var today: Date { date(2026, 11, 27, 15, in: cal) }
+    private func range(_ mode: DashboardMode, _ d: Int) -> DateInterval {
+        nav.filterInterval(for: DashboardPeriod(mode: mode, start: date(2026, 11, d, 0, 0, in: cal)))
+    }
+
+    @Test func aDayIntervalIsDayScope() {
+        #expect(UsageReportScope.infer(from: range(.day, 25), today: today, calendar: cal) == .day)
+        #expect(UsageReportScope.infer(from: range(.day, 22), today: today, calendar: cal) == .day) // a Sunday
+    }
+
+    @Test func aWeekIntervalIsWeekScopeWithDaysCounted() {
+        #expect(UsageReportScope.infer(from: range(.week, 15), today: today, calendar: cal) == .week(daysCounted: 7))
+        #expect(UsageReportScope.infer(from: range(.week, 22), today: today, calendar: cal) == .week(daysCounted: 6))
+    }
+
+    /// The current week on its Sunday is a full week range, so it is never mistaken for a day.
+    @Test func theCurrentWeekOnSundayIsAWeek() {
+        let sunday = date(2026, 11, 22, 9, in: cal)
+        let interval = DashboardCalendar(calendar: cal, today: sunday)
+            .filterInterval(for: DashboardPeriod(mode: .week, start: date(2026, 11, 22, 0, 0, in: cal)))
+        #expect(UsageReportScope.infer(from: interval, today: sunday, calendar: cal) == .week(daysCounted: 1))
+    }
+
+    @Test func todayOnASundayIsADay() {
+        let sunday = date(2026, 11, 22, 9, in: cal)
+        let interval = DashboardCalendar(calendar: cal, today: sunday)
+            .filterInterval(for: DashboardPeriod(mode: .day, start: date(2026, 11, 22, 0, 0, in: cal)))
+        #expect(UsageReportScope.infer(from: interval, today: sunday, calendar: cal) == .day)
+    }
+
+    @Test func noIntervalIsDayScope() {
+        #expect(UsageReportScope.infer(from: nil, today: today, calendar: cal) == .day)
+    }
+
+    @Test func onlyWeeksShowTheMeasureControl() {
+        #expect(!UsageReportScope.day.showsMeasurePicker)
+        #expect(UsageReportScope.week(daysCounted: 3).showsMeasurePicker)
+    }
+}
+
+// MARK: - Categories (V5)
+
+@Suite("CategoryUsage.aggregate")
+@MainActor
+struct CategoryAggregationTests {
+
+    @Test func emptyInputHasNoCategories() {
+        #expect(CategoryUsage.aggregate([CategorySample]()).isEmpty)
+    }
+
+    @Test func mergesTheSameCategoryByToken() throws {
+        let entries = CategoryUsage.aggregate([
+            category("social", name: "Social", seconds: 600),
+            category("social", name: "Social", seconds: 900),
+        ])
+        #expect(entries.count == 1)
+        let first = try #require(entries.first)
+        #expect(first.seconds == 1500)
+        #expect(first.token == "social")
+        #expect(first.displayName == "Social")
+    }
+
+    @Test func mergesByNameWhenTheTokenIsMissing() throws {
+        let entries = CategoryUsage.aggregate([
+            category(nil, name: "Games", seconds: 60),
+            category(nil, name: " Games ", seconds: 60),
+        ])
+        #expect(entries.count == 1)
+        let first = try #require(entries.first)
+        #expect(first.seconds == 120)
+        #expect(first.token == nil)
+    }
+
+    @Test func dropsUnidentifiableAndIdleCategories() {
+        let entries = CategoryUsage.aggregate([
+            category(nil, name: nil, seconds: 500),
+            category("idle", name: "Idle", seconds: 0),
+            category("used", name: "Used", seconds: 10),
+        ])
+        #expect(entries.map(\.displayName) == ["Used"])
+    }
+
+    @Test func sortsBySecondsThenName() {
+        let entries = CategoryUsage.aggregate([
+            category("b", name: "beta", seconds: 300),
+            category("a", name: "Alpha", seconds: 300),
+            category("c", name: "Gamma", seconds: 900),
+        ])
+        #expect(entries.map(\.displayName) == ["Gamma", "Alpha", "beta"])
+    }
+
+    @Test func roundsOnceAfterSumming() throws {
+        let entries = CategoryUsage.aggregate([
+            category("x", seconds: 29.8),
+            category("x", seconds: 0.4),
+        ])
+        let first = try #require(entries.first)
+        #expect(first.seconds == 30)
+    }
+
+    @Test func tokenWithoutNameUsesTheFallbackName() throws {
+        let entries = CategoryUsage.aggregate([category("x", name: nil, seconds: 60)])
+        let first = try #require(entries.first)
+        #expect(first.displayName == CategoryUsage.unknownCategoryName)
+        #expect(CategoryUsage.unknownCategoryName == "Other")
+    }
+
+    @Test func rowIdsAreUnique() {
+        let entries = CategoryUsage.aggregate([
+            category("x", name: "Same", seconds: 60),
+            category(nil, name: "Same", seconds: 60),
+        ])
+        #expect(Set(entries.map(\.id)).count == 2)
+    }
+
+    @Test func averagedEntriesDivideSecondsAndKeepOrder() {
+        let entries = CategoryUsage.aggregate([
+            category("a", name: "A", seconds: 700),
+            category("b", name: "B", seconds: 70),
+        ])
+        let averaged = CategoryUsage.averaged(entries, overDays: 7)
+        #expect(averaged.map(\.seconds) == [100, 10])
+        #expect(averaged.map(\.id) == entries.map(\.id))
+    }
+
+    @Test func breakdownsAreAppsThenCategories() {
+        #expect(UsageBreakdown.allCases == [.apps, .categories])
+        #expect(UsageBreakdown.apps.title == "Apps")
+        #expect(UsageBreakdown.categories.title == "Categories")
+    }
+}
+
+// MARK: - Report figures (V4 + V5 together)
+
+@Suite("UsageReport")
+@MainActor
+struct UsageReportTests {
+
+    private let cal = calendar("America/Denver")
+
+    private func report(days: Int?) -> Report {
+        let start = date(2026, 11, 15, 0, 0, in: cal)
+        let interval = days.map { DateInterval(start: start, end: cal.date(byAdding: .day, value: $0, to: start)!) }
+        return Report.make(
+            segments: [segment(total: 7000, pickupsWithoutApp: 0, [app("com.a.A", seconds: 7000, pickups: 70)])],
+            categories: [category("social", name: "Social", seconds: 7000)],
+            interval: interval,
+            today: date(2026, 11, 27, 15, in: cal),
+            calendar: cal
+        )
+    }
+
+    @Test func makeAggregatesAppsCategoriesAndScope() {
+        let week = report(days: 7)
+        #expect(week.scope == .week(daysCounted: 7))
+        #expect(week.totals.totalSeconds == 7000)
+        #expect(week.categories.map(\.seconds) == [7000])
+        #expect(!week.isEmpty)
+        #expect(report(days: 1).scope == .day)
+    }
+
+    @Test func emptyReportIsEmptyDay() {
+        #expect(Report.empty.isEmpty)
+        #expect(Report.empty.scope == .day)
+    }
+
+    @Test func totalsShowTheRawFigures() {
+        let figures = report(days: 7).figures(.totals)
+        #expect(!figures.isPerDay)
+        #expect(figures.summary.totalSeconds == 7000)
+        #expect(figures.categories.map(\.seconds) == [7000])
+    }
+
+    @Test func weekAveragesDivideByDaysCounted() {
+        let figures = report(days: 7).figures(.averages)
+        #expect(figures.isPerDay)
+        #expect(figures.summary.totalSeconds == 1000)
+        #expect(figures.summary.totalPickups == 10)
+        #expect(figures.summary.apps.map(\.seconds) == [1000])
+        #expect(figures.categories.map(\.seconds) == [1000])
+    }
+
+    @Test func dayReportsAlwaysShowTotals() {
+        // A selection left on Averages from Week mode must not divide a single day.
+        let figures = report(days: 1).figures(.averages)
+        #expect(!figures.isPerDay)
+        #expect(figures.summary.totalSeconds == 7000)
+    }
+
+    @Test func measuresAreTotalsThenAverages() {
+        #expect(UsageMeasure.allCases == [.totals, .averages])
+        #expect(UsageMeasure.totals.title == "Totals")
+        #expect(UsageMeasure.averages.title == "Averages")
+    }
+}
+
+// MARK: - Report copy
+
+@Suite("UsageFormatting — v2 copy")
+@MainActor
+struct UsageReportCopyTests {
+
+    @Test func durationsGetAPerDaySuffixInAverages() {
+        #expect(UsageFormatting.duration(3660, perDay: false) == "1h 1m")
+        #expect(UsageFormatting.duration(3660, perDay: true) == "1h 1m/day")
+        #expect(UsageFormatting.duration(45, perDay: true) == "< 1m/day")
+    }
+
+    @Test func pickupsGetAPerDaySuffixInAverages() {
+        #expect(UsageFormatting.pickups(12, perDay: false) == "12 pickups")
+        #expect(UsageFormatting.pickups(12, perDay: true) == "12 pickups/day")
+        #expect(UsageFormatting.pickups(1, perDay: true) == "1 pickup/day")
+    }
+
+    @Test func headlineNamesTheMeasure() {
+        #expect(UsageFormatting.headline(perDay: false) == "Total Screen Time")
+        #expect(UsageFormatting.headline(perDay: true) == "Daily Average")
+    }
+
+    @Test func emptyStateNamesThePeriod() {
+        #expect(UsageFormatting.emptyTitle(for: .day) == "No usage recorded for this day")
+        #expect(UsageFormatting.emptyTitle(for: .week(daysCounted: 7)) == "No usage recorded for this week")
+    }
+}

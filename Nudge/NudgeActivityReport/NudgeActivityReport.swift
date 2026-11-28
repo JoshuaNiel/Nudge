@@ -14,6 +14,6 @@ import ExtensionKit
 @MainActor
 struct NudgeActivityReport: DeviceActivityReportExtension {
     var body: some DeviceActivityReportScene {
-        NudgeUsageReport { summary in DashboardReportView(summary: summary) }
+        NudgeUsageReport { report in DashboardReportView(report: report) }
     }
 }

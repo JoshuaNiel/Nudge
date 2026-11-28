@@ -319,8 +319,11 @@ detect it. Apple recommends one report on screen, changing only its filter.
 - A segmented control **Day | Week** at the top of the page content (below the header and any
   banner, above the date navigator). Default Day. Kept while the app runs; not persisted.
 - **Week = Sunday–Saturday** (hard-coded for now; a user-set week-start day is backlogged). The
-  week filter is `.daily(during:)` from Sunday 00:00 to the earlier of next Sunday 00:00 and the
-  end of today, so the extension gets one segment per day.
+  week filter is `.daily(during:)` from Sunday 00:00 to next Sunday 00:00 (always the full week,
+  even the current one), so the extension gets one segment per day. Not clipped at today: a
+  clipped current week on a Sunday would equal the day range and the extension (which only sees
+  the filter range) couldn't tell Week from Day. The extension computes "days counted" from the
+  range and its own `Date()`.
 - Switching Day → Week shows the week containing the selected day; Week → Day selects today if
   that week is the current week, otherwise the week's Saturday.
 

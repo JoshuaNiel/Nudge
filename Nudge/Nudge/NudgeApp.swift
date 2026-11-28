@@ -32,6 +32,8 @@ struct NudgeApp: App {
 
     init() {
         registerBackgroundTasks()
+        // Before any navigation bar exists: the main tabs' ~28pt large title (onboarding-progress §5d).
+        MainTabHeaderAppearance.install()
     }
 
     var body: some Scene {
