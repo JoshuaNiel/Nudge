@@ -3,10 +3,25 @@ import AuthenticationServices
 
 struct AuthView: View {
     var onAuthenticated: () -> Void
+    /// Sign-up awaits email confirmation, or sign-in was refused as unconfirmed:
+    /// show the confirm-email screen.
+    var onConfirmationRequired: (PendingEmailConfirmation) -> Void
     /// Opens the reset-password sheet, pre-filled with whatever email is typed.
     var onForgotPassword: (String) -> Void
 
-    @StateObject private var viewModel = AuthViewModel()
+    @StateObject private var viewModel: AuthViewModel
+
+    init(
+        prefillEmail: String = "",
+        onAuthenticated: @escaping () -> Void,
+        onConfirmationRequired: @escaping (PendingEmailConfirmation) -> Void,
+        onForgotPassword: @escaping (String) -> Void
+    ) {
+        self.onAuthenticated = onAuthenticated
+        self.onConfirmationRequired = onConfirmationRequired
+        self.onForgotPassword = onForgotPassword
+        _viewModel = StateObject(wrappedValue: AuthViewModel(prefillEmail: prefillEmail))
+    }
 
     var body: some View {
         ScrollView {
@@ -55,15 +70,6 @@ struct AuthView: View {
                 }
                 .padding(.horizontal, 24)
 
-                // Awaiting email confirmation
-                if let confirmationSentTo = viewModel.confirmationSentTo {
-                    Text("Check \(confirmationSentTo) for a link to confirm your account. Open it on this iPhone to continue.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                }
-
                 // Error
                 if let errorMessage = viewModel.errorMessage {
                     Text(errorMessage)
@@ -71,11 +77,6 @@ struct AuthView: View {
                         .foregroundStyle(.red)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
-                }
-
-                // Signed in before confirming the email
-                if viewModel.unconfirmedEmail != nil {
-                    resendConfirmationSection
                 }
 
                 // Primary action
@@ -127,38 +128,13 @@ struct AuthView: View {
                 .padding(.bottom, 40)
             }
         }
-        .onDisappear { viewModel.discardCapturedCredentials() }
-    }
-
-    private var resendConfirmationSection: some View {
-        VStack(spacing: 8) {
-            Button(action: resendConfirmation) {
-                if viewModel.resendStatus == .sending {
-                    ProgressView()
-                } else {
-                    Text("Resend email")
-                        .font(.footnote)
-                        .fontWeight(.semibold)
-                }
-            }
-            .foregroundStyle(Color.accentColor)
-            .disabled(!viewModel.canResendConfirmation)
-
-            if let resendMessage = viewModel.resendMessage {
-                Text(resendMessage)
-                    .font(.footnote)
-                    .foregroundStyle(viewModel.resendStatus == .sent ? Color.secondary : Color.red)
-                    .multilineTextAlignment(.center)
-            }
-        }
-        .padding(.horizontal, 24)
     }
 
     // MARK: - Previews
 }
 
 #Preview {
-    AuthView(onAuthenticated: {}, onForgotPassword: { _ in })
+    AuthView(onAuthenticated: {}, onConfirmationRequired: { _ in }, onForgotPassword: { _ in })
 }
 
 extension AuthView {
@@ -166,13 +142,11 @@ extension AuthView {
 
     private func submitEmailPassword() {
         Task {
-            if await viewModel.submit() { onAuthenticated() }
-        }
-    }
-
-    private func resendConfirmation() {
-        Task {
-            if await viewModel.resendConfirmation() { onAuthenticated() }
+            switch await viewModel.submit() {
+            case .signedIn: onAuthenticated()
+            case .needsEmailConfirmation(let pending): onConfirmationRequired(pending)
+            case .failed: break
+            }
         }
     }
 

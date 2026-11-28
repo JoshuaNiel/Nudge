@@ -19,8 +19,8 @@ final class ForgotPasswordViewModel: ObservableObject {
         case offline
     }
 
+    static let instructionsMessage = "Enter the email you use for Nudge and we'll send you a link to choose a new password. Open the link on this device."
     static let neutralMessage = "If an account exists for that email, we've sent a reset link."
-    static let rateLimitedMessage = "Please wait a minute before trying again."
     static let offlineMessage = "Couldn't reach Nudge. Check your connection and try again."
     static let invalidEmailMessage = "Please enter a valid email address."
 
@@ -54,7 +54,7 @@ final class ForgotPasswordViewModel: ObservableObject {
         switch status {
         case .idle, .sending: nil
         case .sent: Self.neutralMessage
-        case .rateLimited: Self.rateLimitedMessage
+        case .rateLimited: AuthErrorMapping.busyMessage
         case .offline: Self.offlineMessage
         }
     }
@@ -81,7 +81,7 @@ final class ForgotPasswordViewModel: ObservableObject {
     /// Maps a failed reset request to what the user sees. Anything that isn't a
     /// rate limit or a transport failure is deliberately reported as `.sent`.
     private static func status(for error: Error) -> Status {
-        if let authError = error as? AuthError, case .rateLimited = authError { return .rateLimited }
+        if AuthErrorMapping.isRateLimited(error) { return .rateLimited }
         if error is URLError { return .offline }
         return .sent
     }

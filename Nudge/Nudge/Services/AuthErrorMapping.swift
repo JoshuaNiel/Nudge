@@ -6,6 +6,21 @@ internal import Auth  // for `Auth.AuthError` (shadowed by the app's `AuthError`
 /// Kept apart from the ViewModels so they never match on SDK error cases themselves.
 enum AuthErrorMapping {
 
+    /// Shown for every rate limit in the auth flows (reset request, sign-in, sign-up,
+    /// Resend, Set New Password). Spec C5: one generic message, no wait time promised.
+    static let busyMessage = "Our servers are busy right now. Please try again in a moment."
+
+    /// `busyMessage` for a rate limit, otherwise `nil`.
+    static func rateLimitMessage(for error: Error) -> String? {
+        isRateLimited(error) ? busyMessage : nil
+    }
+
+    /// What an auth screen shows for a failure with no screen-specific mapping:
+    /// the busy message for a rate limit, otherwise the error's own description.
+    static func message(for error: Error) -> String {
+        rateLimitMessage(for: error) ?? error.localizedDescription
+    }
+
     /// Sign-in with a correct password for an account whose email isn't confirmed yet.
     /// GoTrue returns 400 `email_not_confirmed` only after the password checks out.
     static func isEmailNotConfirmed(_ error: Error) -> Bool {

@@ -32,7 +32,7 @@ enum AuthLinkFailure: String, Equatable, CaseIterable {
     static let alertTitle = "Link Problem"
 
     static let expiredMessage = "This link has expired. Request a new one."
-    static let differentDeviceResetMessage = "This link was requested on a different device. Open it on the iPhone where you asked for it, or request a new one here."
+    static let differentDeviceResetMessage = "This link was requested on a different device. Open it on the device where you asked for it, or request a new one here."
     static let confirmedSignInMessage = "Your email is confirmed. Sign in with your email and password."
     static let olderRequestMessage = "This link is from an older request. Use the newest email, or request a new one."
     static let alreadyUsedMessage = "This link has already been used. Request a new one if you still need it."

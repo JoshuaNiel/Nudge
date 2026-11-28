@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Drives the full onboarding sequence:
-/// feature tour → auth → profile setup → permissions → done
+/// feature tour → auth (→ confirm email) → profile setup → permissions → done
 ///
 /// Starts at the tour by default. After an in-app account deletion ("Back to Sign In",
 /// account-deletion spec D) it starts at `.auth`, skipping the tour.
@@ -13,12 +13,25 @@ struct OnboardingCoordinator: View {
     /// The step this coordinator was created at. Read once: later changes are ignored.
     let initialStep: Step
     @State private var step: Step
+    /// Email to prefill when returning to the sign-in form from the confirm-email screen.
+    @State private var authPrefillEmail = ""
 
-    enum Step {
+    enum Step: Equatable {
         case tour
         case auth
+        /// Waiting for the emailed confirmation link (auth-recovery spec C5). Carries the
+        /// Resend credentials, which are dropped when the step changes.
+        case confirmEmail(PendingEmailConfirmation)
         case profileSetup
         case permissions
+
+        /// Signed-out steps: a session arriving from an email link moves past them.
+        var advancesOnSignIn: Bool {
+            switch self {
+            case .tour, .auth, .confirmEmail: true
+            case .profileSetup, .permissions: false
+            }
+        }
     }
 
     init(onboardingComplete: Binding<Bool>, startingAt initialStep: Step = .tour) {
@@ -34,7 +47,7 @@ struct OnboardingCoordinator: View {
             // the pre-auth steps so the user isn't left on a sign-in form while
             // already signed in.
             .onChange(of: appState.isAuthenticated) { _, isAuthenticated in
-                if isAuthenticated && (step == .tour || step == .auth) {
+                if isAuthenticated && step.advancesOnSignIn {
                     step = .profileSetup
                 }
             }
@@ -47,8 +60,19 @@ struct OnboardingCoordinator: View {
             OnboardingTourView(onFinished: { step = .auth })
         case .auth:
             AuthView(
+                prefillEmail: authPrefillEmail,
                 onAuthenticated: { step = .profileSetup },
+                onConfirmationRequired: { pending in step = .confirmEmail(pending) },
                 onForgotPassword: { email in authRecovery.presentForgotPassword(prefillEmail: email) }
+            )
+        case .confirmEmail(let pending):
+            ConfirmEmailView(
+                pending: pending,
+                onAuthenticated: { step = .profileSetup },
+                onBackToSignIn: { email in
+                    authPrefillEmail = email
+                    step = .auth
+                }
             )
         case .profileSetup:
             ProfileSetupView(onCompleted: { step = .permissions })

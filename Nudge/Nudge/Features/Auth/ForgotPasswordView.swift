@@ -22,7 +22,7 @@ struct ForgotPasswordView: View {
                         Text("Reset your password")
                             .font(.title2)
                             .fontWeight(.bold)
-                        Text("Enter the email you use for Nudge and we'll send you a link to choose a new password. Open the link on this iPhone.")
+                        Text(ForgotPasswordViewModel.instructionsMessage)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)

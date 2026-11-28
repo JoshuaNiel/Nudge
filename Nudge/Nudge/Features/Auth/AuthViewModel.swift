@@ -5,78 +5,54 @@ import AuthenticationServices
 /// Drives the sign-in / sign-up form on `AuthView`.
 ///
 /// Sign-up applies `PasswordRules` (8+ characters, must match). Sign-in has no
-/// length check, because existing accounts may have shorter passwords. Signing in
-/// before confirming the email offers a "Resend email" action, which repeats the
-/// sign-up with the credentials that were refused (PKCE link, unlike `auth.resend`).
+/// length check, because existing accounts may have shorter passwords. A sign-up that
+/// awaits email confirmation, or a sign-in refused with `email_not_confirmed`, hands
+/// off to the confirm-email screen (`ConfirmEmailViewModel`), which owns Resend.
 @MainActor
 final class AuthViewModel: ObservableObject {
 
     enum Mode { case signIn, signUp }
 
-    enum ResendStatus: Equatable {
-        case idle
-        case sending
-        case sent
-        case failed(String)
+    /// What a submit led to; `AuthView` routes on it.
+    enum SubmitOutcome: Equatable {
+        case signedIn
+        /// Show the confirm-email screen with these credentials.
+        case needsEmailConfirmation(PendingEmailConfirmation)
+        /// Stay on the form; `errorMessage` says why.
+        case failed
     }
 
     static let missingFieldsMessage = "Please fill in all fields."
-    static let emailNotConfirmedMessage = "Confirm your email first. Check your inbox for the link."
-    static let resendSentMessage = "Email sent. Check your inbox for the new link."
-    static let resendFailedMessage = "Couldn't send the email. Try again."
 
     @Published var mode: Mode = .signIn
-    @Published var email = "" {
-        didSet { if email != oldValue { discardCapturedCredentials() } }
-    }
+    @Published var email: String
     @Published var password = ""
     @Published var confirmPassword = ""
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String? = nil
-    /// Set after sign-up when Supabase requires email confirmation before a session exists.
-    @Published private(set) var confirmationSentTo: String? = nil
-    /// The address a sign-in was refused for because it isn't confirmed; Resend uses it.
-    @Published private(set) var unconfirmedEmail: String? = nil
-    @Published private(set) var resendStatus: ResendStatus = .idle
-    /// The password of the refused sign-in, so Resend can repeat the sign-up.
-    /// Memory only; never logged or persisted. Cleared on a successful resend,
-    /// when the email changes, and when the sign-in screen goes away.
-    private var unconfirmedPassword: String? = nil
 
     private let service: AuthEmailServiceProtocol
 
     // Production init — uses the real service
-    init() {
+    init(prefillEmail: String = "") {
         self.service = AuthService()
+        self.email = prefillEmail
     }
 
     // Test init — accepts a mock
-    init(service: AuthEmailServiceProtocol) {
+    init(service: AuthEmailServiceProtocol, prefillEmail: String = "") {
         self.service = service
-    }
-
-    // MARK: - Computed
-
-    var canResendConfirmation: Bool {
-        unconfirmedEmail != nil && unconfirmedPassword != nil && resendStatus != .sending
-    }
-
-    var resendMessage: String? {
-        switch resendStatus {
-        case .idle, .sending: nil
-        case .sent: Self.resendSentMessage
-        case .failed(let message): message
-        }
+        self.email = prefillEmail
     }
 
     // MARK: - Email/Password
 
-    /// Signs in or signs up. Returns `true` when a session now exists.
-    func submit() async -> Bool {
-        resetMessages()
+    /// Signs in or signs up.
+    func submit() async -> SubmitOutcome {
+        errorMessage = nil
         if let error = validationError() {
             errorMessage = error
-            return false
+            return .failed
         }
 
         isLoading = true
@@ -89,59 +65,27 @@ final class AuthViewModel: ObservableObject {
                 if try await service.signUp(email: email, password: password) {
                     // No session yet. The nudge://auth-callback link signs the
                     // user in; OnboardingCoordinator advances when it does.
-                    confirmationSentTo = email
-                    return false
+                    return .needsEmailConfirmation(pendingConfirmation(.afterSignUp))
                 }
             }
-            return true
+            return .signedIn
         } catch {
-            handle(error)
-            return false
+            return handle(error)
         }
-    }
-
-    /// Repeats the sign-up with the captured credentials, so the new link uses PKCE.
-    /// Returns `true` when a session now exists (the email was confirmed meanwhile).
-    func resendConfirmation() async -> Bool {
-        guard let unconfirmedEmail, let unconfirmedPassword, resendStatus != .sending else { return false }
-        resendStatus = .sending
-        do {
-            let confirmationPending = try await service.signUp(email: unconfirmedEmail, password: unconfirmedPassword)
-            self.unconfirmedPassword = nil
-            guard confirmationPending else {
-                resetMessages()
-                return true
-            }
-            resendStatus = .sent
-        } catch {
-            resendStatus = .failed(
-                AuthErrorMapping.isRateLimited(error)
-                    ? AuthError.rateLimited.localizedDescription
-                    : Self.resendFailedMessage
-            )
-        }
-        return false
-    }
-
-    /// Drops the Resend credentials. Call when leaving the sign-in screen.
-    func discardCapturedCredentials() {
-        unconfirmedEmail = nil
-        unconfirmedPassword = nil
-        resendStatus = .idle
     }
 
     // MARK: - Sign in with Apple
 
     /// Returns `true` when a session now exists.
     func signInWithApple(credential: ASAuthorizationAppleIDCredential) async -> Bool {
-        resetMessages()
+        errorMessage = nil
         isLoading = true
         defer { isLoading = false }
         do {
             try await service.signInWithApple(credential: credential)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = AuthErrorMapping.message(for: error)
             return false
         }
     }
@@ -157,7 +101,7 @@ final class AuthViewModel: ObservableObject {
 
     func toggleMode() {
         mode = mode == .signIn ? .signUp : .signIn
-        resetMessages()
+        errorMessage = nil
         password = ""
         confirmPassword = ""
     }
@@ -172,22 +116,19 @@ final class AuthViewModel: ObservableObject {
         return nil
     }
 
-    private func handle(_ error: Error) {
-        switch mode {
-        case .signIn where AuthErrorMapping.isEmailNotConfirmed(error):
-            errorMessage = Self.emailNotConfirmedMessage
-            unconfirmedEmail = email
-            unconfirmedPassword = password
-        case .signUp:
-            errorMessage = AuthErrorMapping.weakPasswordMessage(for: error) ?? error.localizedDescription
-        default:
-            errorMessage = error.localizedDescription
+    private func handle(_ error: Error) -> SubmitOutcome {
+        if mode == .signIn, AuthErrorMapping.isEmailNotConfirmed(error) {
+            return .needsEmailConfirmation(pendingConfirmation(.unconfirmedSignIn))
         }
+        if mode == .signUp, let weakPassword = AuthErrorMapping.weakPasswordMessage(for: error) {
+            errorMessage = weakPassword
+        } else {
+            errorMessage = AuthErrorMapping.message(for: error)
+        }
+        return .failed
     }
 
-    private func resetMessages() {
-        errorMessage = nil
-        confirmationSentTo = nil
-        discardCapturedCredentials()
+    private func pendingConfirmation(_ variant: ConfirmEmailVariant) -> PendingEmailConfirmation {
+        PendingEmailConfirmation(email: email, password: password, variant: variant)
     }
 }

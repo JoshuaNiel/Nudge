@@ -200,10 +200,10 @@ struct ForgotPasswordViewModelTests {
 
     @Test func neutralMessageWording() {
         #expect(ForgotPasswordViewModel.neutralMessage == "If an account exists for that email, we've sent a reset link.")
-        #expect(ForgotPasswordViewModel.rateLimitedMessage == "Please wait a minute before trying again.")
+        #expect(AuthErrorMapping.busyMessage == "Our servers are busy right now. Please try again in a moment.")
     }
 
-    @Test func rateLimitShowsWaitMessage() async {
+    @Test func rateLimitShowsBusyMessage() async {
         let mock = MockAuthRecoveryService()
         mock.resetError = AuthError.rateLimited
         let vm = ForgotPasswordViewModel(email: "grace@example.com", service: mock)
@@ -211,7 +211,7 @@ struct ForgotPasswordViewModelTests {
         await vm.submit()
 
         #expect(vm.status == .rateLimited)
-        #expect(vm.statusMessage == ForgotPasswordViewModel.rateLimitedMessage)
+        #expect(vm.statusMessage == AuthErrorMapping.busyMessage)
     }
 
     @Test func serverErrorIsSwallowedIntoNeutralMessage() async {
@@ -719,7 +719,7 @@ struct AuthLinkFailureMessageTests {
 
     @Test func messageWording() {
         #expect(AuthLinkFailure.expiredMessage == "This link has expired. Request a new one.")
-        #expect(AuthLinkFailure.differentDeviceResetMessage == "This link was requested on a different device. Open it on the iPhone where you asked for it, or request a new one here.")
+        #expect(AuthLinkFailure.differentDeviceResetMessage == "This link was requested on a different device. Open it on the device where you asked for it, or request a new one here.")
         #expect(AuthLinkFailure.confirmedSignInMessage == "Your email is confirmed. Sign in with your email and password.")
         #expect(AuthLinkFailure.olderRequestMessage == "This link is from an older request. Use the newest email, or request a new one.")
         #expect(AuthLinkFailure.alreadyUsedMessage == "This link has already been used. Request a new one if you still need it.")

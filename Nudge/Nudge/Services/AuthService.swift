@@ -122,7 +122,7 @@ class AuthService: AuthRecoveryServiceProtocol, AuthEmailServiceProtocol {
 enum AuthError: LocalizedError {
     case missingAppleIdentityToken
     case notAuthenticated
-    /// Supabase refused an email-sending request because of rate limiting.
+    /// Supabase refused a request because of rate limiting.
     case rateLimited
 
     var errorDescription: String? {
@@ -132,7 +132,7 @@ enum AuthError: LocalizedError {
         case .notAuthenticated:
             return "No authenticated user found."
         case .rateLimited:
-            return "Please wait a minute before trying again."
+            return AuthErrorMapping.busyMessage
         }
     }
 }
