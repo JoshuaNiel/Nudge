@@ -35,7 +35,14 @@ Parking lot for future features and known bugs. Nothing here is actively schedul
 - **Universal links instead of the `nudge://` scheme.** Any app can claim a custom URL scheme, so auth email links could reach the wrong app. PKCE makes that harmless today, but universal links (`https://<domain>/auth/...`, verified with an `apple-app-site-association` file and the Associated Domains capability) make the links unclaimable. Needs a domain plus hosting. Update the Supabase redirect URLs and `AuthDeepLink`. Pre-launch. (User request 2026-11-27.)
 - **Custom SMTP before launch.** Email confirmation is on as of 2026-11-23 (#16). Supabase's built-in email only sends to project team members, with a low hourly cap, so real users won't get confirmation or reset emails. Configure custom SMTP (e.g. Resend or Postmark) under Authentication → SMTP Settings, and review the email templates.
 - **Rework when the onboarding tour shows.** Today the tour shows on every fresh start of the onboarding flow: a first launch, any sign-out, and any relaunch while signed out. Only "Back to Sign In" after an account deletion skips it (#19, account-deletion spec D). The user wants to revisit when it appears, and has other tweaks for the tour itself; get the details from the user before speccing. Related to the returning-user item below. (User request 2026-11-23.)
-- **A returning user on a new device or reinstall redoes onboarding.** `onboardingComplete` is a device-local `@AppStorage` flag, so signing in to an existing account on a fresh install walks through profile setup and permissions again. (Found 2026-11-23 on the Simulator.) Fix: after sign-in, skip profile setup when the `profile` row already has a name, and show permissions only for permissions that aren't granted on this device. Set the flag once both are satisfied.
+- **Next PR after #16: onboarding progress + permission banners (design approved by the user 2026-11-27; needs a full spec).**
+  - **Hybrid design.** A server-side Postgres function `onboarding_status()` (security invoker, `auth.uid()`) computes the next *account* step from real data (profile name, goals, friends) plus two stored facts on `profile`:
+    - `onboarding_completed_at`: once set, the user is never sent back into onboarding;
+    - `onboarding_skipped_steps text[]`.
+  - It replaces the device-local `onboardingComplete` `@AppStorage` flag, and fixes "a returning user on a new device or reinstall redoes onboarding".
+  - Changing the flow means changing that one function. New steps for users who already finished appear as optional prompts.
+  - **Device steps are separate.** Notifications and Screen Time access are checked on the device: onboarding asks once if they're not determined; after that, persistent banners on Dashboard, Goals and other affected screens ("Notifications are off…" / "Screen Time access needed" with Turn On), re-checked on every foreground.
+  - Migration backfills existing users.
 
 ## APNs / Social
 
