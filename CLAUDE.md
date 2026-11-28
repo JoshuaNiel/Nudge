@@ -48,7 +48,7 @@ Run the full test suite:
 xcodebuild test \
   -project Nudge.xcodeproj \
   -scheme Nudge \
-  -destination 'platform=iOS Simulator,arch=arm64,id=19C7BD9B-6973-4F63-8492-C8D13401B835'
+  -destination 'platform=iOS Simulator,arch=arm64,id=CBF5092A-00BE-4690-87E7-E0A3D9F376D6'
 ```
 
 See `docs/conventions.md` → Testing section for test file conventions.

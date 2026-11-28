@@ -388,3 +388,33 @@ These decisions come from the approved v2 specs (`docs/specs/phase-3-goals.md`,
   - **Toggle source:** the report toggle is read from the App Group by every registration path, so the app and the extension always compute the same signature. If they computed different ones, each would keep re-registering after the other and reset the day's counters.
   - **Expiry:** a queued report is dropped once the day it was due has ended.
   - **Catch-up:** a mid-day `intervalDidStart` queues a report that was missed.
+
+---
+
+## PR walkthrough decisions (2026-11-23 → 2026-11-27)
+
+### ADR-070: Count past activity, dedup fired events per (event, threshold)
+Every `DeviceActivityEvent` uses `includesPastActivity: true`. `FiredEventStore` records
+`"<event>@<thresholdSeconds>"` per local day, so a re-registration never repeats a notification
+or SMS, while a raised limit notifies again. Amends ADR-054. (#13)
+
+### ADR-071: Email links stay PKCE-only; Resend repeats the sign-up
+`auth.resend` (supabase-swift 2.43.1) sends no PKCE challenge, so its email would carry tokens
+through the claimable `nudge://` scheme. Resend calls the PKCE `signUp` with the credentials
+captured when sign-in was refused. Universal links are a pre-launch backlog item. (#16)
+
+### ADR-072: Account deletion requires a recent password sign-in, checked twice
+The app re-authenticates. `delete-account` also requires the JWT's `amr` to show a password
+sign-in within 300 s, otherwise it returns 403 `reauth_required`. (#19)
+
+### ADR-073: Onboarding progress is computed by the server, cached on the device, written through an outbox
+`onboarding_status()` derives the next account step from data plus `profile.onboarding_completed`
+(a boolean that only goes from false to true). Device permissions are never stored: the full-screen
+permissions page shows once per device, after which banners and in-context asks take over. A
+per-user device copy and a generic persisted `Outbox` make onboarding work offline. The Outbox is
+the foundation for app-wide offline-first (backlog). (#26)
+
+### ADR-074: Screen Time revoke is inferred from lapsed monitoring
+FamilyControls caches its authorization status per process, and `startMonitoring` doesn't throw
+after a revoke. If monitoring was registered today but `DeviceActivityCenter.activities` is
+empty, the app treats Screen Time as denied until an in-app approval. (#26)
